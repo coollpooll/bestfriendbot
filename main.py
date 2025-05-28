@@ -1,10 +1,9 @@
 import os
-import json
-from datetime import datetime
 from openai import OpenAI
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
+import json
 
 app = FastAPI()
 
@@ -14,36 +13,9 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-LIMITS_FILE = "limits.json"
-
 class TelegramMessage(BaseModel):
     update_id: int
     message: dict = None
-
-def load_limits():
-    if os.path.exists(LIMITS_FILE):
-        with open(LIMITS_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_limits(data):
-    with open(LIMITS_FILE, "w") as f:
-        json.dump(data, f)
-
-def check_limit(user_id):
-    today = datetime.now().strftime("%Y-%m-%d")
-    data = load_limits()
-    user_data = data.get(str(user_id), {})
-    if user_data.get("date") != today:
-        data[str(user_id)] = {"date": today, "count": 1}
-        save_limits(data)
-        return True
-    elif user_data["count"] < 3:
-        data[str(user_id)]["count"] += 1
-        save_limits(data)
-        return True
-    else:
-        return False
 
 async def send_message(chat_id, text):
     async with httpx.AsyncClient() as client_http:
@@ -78,6 +50,7 @@ async def generate_dalle(prompt):
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     body = await req.json()
+    print(json.dumps(body, indent=2))
     update = TelegramMessage(**body)
 
     if not update.message:
@@ -86,12 +59,13 @@ async def telegram_webhook(req: Request):
     try:
         msg = update.message
         chat_id = msg["chat"]["id"]
-        user_id = msg["from"]["id"]
         text = msg.get("text", "")
+
+        print(f"CHAT_ID: {chat_id}")  # 👈 Эта строка покажет твой ID в логах Render
 
         if text.startswith("/start"):
             await send_message(chat_id,
-                "👋 Привет,я BEST FRIEND 🤖 — я твой личный ИИ, который делает не ищет в тебе выгоду, не уговаривает, не льстит.\n\n"
+                "👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который делает не ищет в тебе выгоду, не уговаривает, не льстит.\n\n"
                 "🎓 Заменяю любые платные курсы.\n"
                 "🧠 Отвечаю как GPT-4.\n"
                 "🎤 Говорю голосом.\n"
@@ -101,13 +75,7 @@ async def telegram_webhook(req: Request):
                 "💳 Подписка: 399₽/мес или 2990₽/год.\n\n"
                 "Начни с любого запроса. Я уже жду."
             )
-            return {"ok": True}
-
-        if not check_limit(user_id):
-            await send_message(chat_id, "🚫 Лимит 3 бесплатных запросов в сутки исчерпан. Оформи подписку, чтобы продолжить 🧠")
-            return {"ok": True}
-
-        if text.startswith("/скажи"):
+        elif text.startswith("/скажи"):
             query = text.replace("/скажи", "").strip()
             if query:
                 audio = await generate_speech(query)
@@ -134,7 +102,8 @@ async def telegram_webhook(req: Request):
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
-    return {"ok": True}
+    return {"ok": True"}
+
 
 
 
