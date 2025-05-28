@@ -100,6 +100,10 @@ async def telegram_webhook(req: Request):
             ON CONFLICT (chat_id) DO NOTHING;
         """, {"chat_id": str(chat_id)})
 
+        if text == "/start":
+            await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
+            return {"ok": True}
+
         if "document" in msg:
             file = msg["document"]
             file_id = file["file_id"]
@@ -133,6 +137,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
