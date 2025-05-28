@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 import json
-import serpapi
+from serpapi import GoogleSearch  # 🔧 Исправленный импорт
 
 app = FastAPI()
 
@@ -48,7 +48,7 @@ def get_latest_news():
         "gl": "ru",
         "api_key": SERPAPI_KEY
     }
-    search = serpapi.GoogleSearch(params)
+    search = GoogleSearch(params)
     results = search.get_dict()
     news_results = results.get("news_results", [])
     if not news_results:
@@ -135,5 +135,3 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
-
-
