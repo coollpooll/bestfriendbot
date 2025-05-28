@@ -7,4 +7,3 @@ httpx
 serpapi
 google-search-results
 databases[postgresql]
-add databases requirement
