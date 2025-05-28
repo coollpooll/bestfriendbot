@@ -61,7 +61,7 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "")
 
-        if text.startswith("/start"):
+if text.startswith("/start"):
     await send_message(chat_id,
         "Меня зовут BEST FRIEND 🤖 — я твой личный ИИ, который делает всё, за что другие берут бабки.\n\n"
         "🎓 Заменяю любые платные курсы.\n"
