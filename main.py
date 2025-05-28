@@ -8,7 +8,8 @@ from serpapi import GoogleSearch
 app = FastAPI()
 
 BOT_TOKEN = "7699903458:AAEGl6YvcYpFTFh9-D61JSYeWGA9blqiOyc"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID = "asst_uPuKSO4il3oJodGZUsLWH974"
 SERPAPI_KEY = "292bb3653ec4db2e9abc418bc91548b1fec768997bf9f1aec3937f426272ae29"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -49,20 +50,17 @@ def get_latest_news():
     news_results = results.get("news_results", [])
     if not news_results:
         return "Не удалось получить свежие новости."
-    headlines = [f"\u2022 {item['title']}" for item in news_results[:5]]
+    headlines = [f"• {item['title']}" for item in news_results[:5]]
     return "\n".join(headlines)
 
 async def generate_dalle(prompt):
-    try:
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            n=1,
-            size="1024x1024"
-        )
-        return response.data[0].url
-    except Exception as e:
-        return None
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=prompt,
+        n=1,
+        size="1024x1024"
+    )
+    return response.data[0].url
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
@@ -80,14 +78,14 @@ async def telegram_webhook(req: Request):
         if text.startswith("/start"):
             await update_bot_commands()
             await send_message(chat_id,
-                """\U0001F44B Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
+                """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
 
 🎓 Заменяю любые платные курсы.
 🧠 Отвечаю как GPT-4.
 🎨 Рисую картинки.
 🎥 Скоро — видео.
 
-🌀 3 запроса каждый день — бесплатно.
+🆓 3 запроса каждый день — бесплатно.
 💳 Подписка: 399₽/мес или 2990₽/год.
 
 Начни с любого запроса. Я уже жду."""
@@ -119,11 +117,8 @@ async def telegram_webhook(req: Request):
 
         if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение", "фото", "изображение"]):
             image_url = await generate_dalle(text)
-            if image_url:
-                async with httpx.AsyncClient() as client_http:
-                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
-            else:
-                await send_message(chat_id, "❌ Не удалось создать изображение. Попробуй переформулировать запрос.")
+            async with httpx.AsyncClient() as client_http:
+                await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
             return {"ok": True}
 
         if "что нового" in text.lower() or "новости" in text.lower():
@@ -131,26 +126,32 @@ async def telegram_webhook(req: Request):
             await send_message(chat_id, news)
             return {"ok": True}
 
-        history = chat_histories.get(user_id, [])
-        history.append({"role": "user", "content": text})
-        if len(history) > 20:
-            history = history[-20:]
-
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=history,
-            temperature=0.7
+        thread = client.beta.threads.create()
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=text
         )
-        reply = completion.choices[0].message.content
-        history.append({"role": "assistant", "content": reply})
-        chat_histories[user_id] = history
 
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=ASSISTANT_ID
+        )
+
+        while True:
+            run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+            if run_status.status == "completed":
+                break
+
+        messages = client.beta.threads.messages.list(thread_id=thread.id)
+        reply = messages.data[0].content[0].text.value
         await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
