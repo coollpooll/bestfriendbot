@@ -15,7 +15,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 usage_counter = {}
-user_histories = {}
+chat_histories = {}
 
 class TelegramMessage(BaseModel):
     update_id: int
@@ -28,19 +28,6 @@ async def send_message(chat_id, text):
             "text": text,
             "parse_mode": "Markdown"
         })
-
-async def send_voice(chat_id, audio_bytes):
-    files = {"voice": ("voice.mp3", audio_bytes)}
-    async with httpx.AsyncClient() as client_http:
-        await client_http.post(f"{TELEGRAM_API}/sendVoice", data={"chat_id": chat_id}, files=files)
-
-async def generate_speech(text):
-    response = await client.audio.speech.create(
-        model="tts-1",
-        voice="onyx",
-        input=text
-    )
-    return await response.read()
 
 def get_latest_news():
     params = {
@@ -82,13 +69,11 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")
 
         if text.startswith("/start"):
-            user_histories[chat_id] = []
-            await send_message(chat_id,
+            await send_message(chat_id, 
                 """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
 
 🎓 Заменяю любые платные курсы.
 🧠 Отвечаю как GPT-4.
-🎤 Говорю голосом.
 🎨 Рисую картинки.
 🎥 Скоро — видео.
 
@@ -97,61 +82,51 @@ async def telegram_webhook(req: Request):
 
 Начни с любого запроса. Я уже жду."""
             )
-            return {"ok": True}
+        else:
+            user_id = str(chat_id)
+            is_owner = user_id == "520740282"
 
-        elif text.startswith("/скажи"):
-            query = text.replace("/скажи", "").strip()
-            if query:
-                audio = await generate_speech(query)
-                await send_voice(chat_id, audio)
-            else:
-                await send_message(chat_id, "🔊 Напиши что озвучить: `/скажи твой текст`")
-            return {"ok": True}
+            if not is_owner:
+                usage_key = f"user_usage:{user_id}"
+                count = usage_counter.get(usage_key, 0)
+                if count >= 3:
+                    await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
+                    return
+                usage_counter[usage_key] = count + 1
 
-        # Проверка лимита
-        user_id = str(chat_id)
-        is_owner = user_id == "520740282"
-        if not is_owner:
-            usage_key = f"user_usage:{user_id}"
-            count = usage_counter.get(usage_key, 0)
-            if count >= 3:
-                await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
+            if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
+                image_url = await generate_dalle(text)
+                async with httpx.AsyncClient() as client_http:
+                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
                 return {"ok": True}
-            usage_counter[usage_key] = count + 1
 
-        # Картинка
-        if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
-            image_url = await generate_dalle(text)
-            async with httpx.AsyncClient() as client_http:
-                await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
-            return {"ok": True}
+            if "что нового" in text.lower() or "новости" in text.lower():
+                news = get_latest_news()
+                await send_message(chat_id, news)
+                return {"ok": True}
 
-        # Новости
-        if "что нового" in text.lower() or "новости" in text.lower():
-            news = get_latest_news()
-            await send_message(chat_id, news)
-            return {"ok": True}
+            # Добавим память
+            history = chat_histories.get(user_id, [])
+            history.append({"role": "user", "content": text})
+            if len(history) > 20:
+                history = history[-20:]
 
-        # История сообщений
-        history = user_histories.get(chat_id, [])
-        history.append({"role": "user", "content": text})
-        if len(history) > 20:
-            history = history[-20:]
+            completion = client.chat.completions.create(
+                model="gpt-4o",
+                messages=history,
+                temperature=0.7
+            )
+            reply = completion.choices[0].message.content
+            history.append({"role": "assistant", "content": reply})
+            chat_histories[user_id] = history
 
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=history,
-            temperature=0.7
-        )
-        reply = completion.choices[0].message.content
-        history.append({"role": "assistant", "content": reply})
-        user_histories[chat_id] = history
-        await send_message(chat_id, reply)
+            await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
