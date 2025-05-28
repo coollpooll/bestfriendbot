@@ -15,6 +15,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 usage_counter = {}
+user_histories = {}
 
 class TelegramMessage(BaseModel):
     update_id: int
@@ -53,7 +54,7 @@ def get_latest_news():
     news_results = results.get("news_results", [])
     if not news_results:
         return "Не удалось получить свежие новости."
-    headlines = [f"\u2022 {item['title']}" for item in news_results[:5]]
+    headlines = [f"• {item['title']}" for item in news_results[:5]]
     return "\n".join(headlines)
 
 async def generate_dalle(prompt):
@@ -78,65 +79,80 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "")
 
-        await send_message(chat_id, f"\u2705 Твой chat_id: `{chat_id}`")
+        await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")
 
         if text.startswith("/start"):
-            await send_message(chat_id, 
-                """\ud83d\udc4b Привет, я BEST FRIEND \ud83e\udd16 \u2014 я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
+            user_histories[chat_id] = []
+            await send_message(chat_id,
+                """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
 
-\ud83c\udf93 Заменяю любые платные курсы.
-\ud83e\udde0 Отвечаю как GPT-4.
-\ud83c\udfa4 Говорю голосом.
-\ud83c\udfa8 Рисую картинки.
-\ud83c\udfa5 Скоро \u2014 видео.
+🎓 Заменяю любые платные курсы.
+🧠 Отвечаю как GPT-4.
+🎤 Говорю голосом.
+🎨 Рисую картинки.
+🎥 Скоро — видео.
 
-\ud83c\udd7f\ufe0f 3 запроса каждый день \u2014 бесплатно.
-\ud83d\udcb3 Подписка: 399\u20bd/мес или 2990\u20bd/год.
+🆓 3 запроса каждый день — бесплатно.
+💳 Подписка: 399₽/мес или 2990₽/год.
 
 Начни с любого запроса. Я уже жду."""
             )
+            return {"ok": True}
+
         elif text.startswith("/скажи"):
             query = text.replace("/скажи", "").strip()
             if query:
                 audio = await generate_speech(query)
                 await send_voice(chat_id, audio)
             else:
-                await send_message(chat_id, "\ud83d\udd0a Напиши что озвучить: `/скажи твой текст`")
-        else:
-            user_id = str(chat_id)
-            is_owner = user_id == "520740282"
+                await send_message(chat_id, "🔊 Напиши что озвучить: `/скажи твой текст`")
+            return {"ok": True}
 
-            if not is_owner:
-                usage_key = f"user_usage:{user_id}"
-                count = usage_counter.get(usage_key, 0)
-                if count >= 3:
-                    await send_message(chat_id, "\u274c Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399\u20bd и пользуйся без ограничений.")
-                    return
-                usage_counter[usage_key] = count + 1
-
-            if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
-                image_url = await generate_dalle(text)
-                async with httpx.AsyncClient() as client_http:
-                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+        # Проверка лимита
+        user_id = str(chat_id)
+        is_owner = user_id == "520740282"
+        if not is_owner:
+            usage_key = f"user_usage:{user_id}"
+            count = usage_counter.get(usage_key, 0)
+            if count >= 3:
+                await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
                 return {"ok": True}
+            usage_counter[usage_key] = count + 1
 
-            if "что нового" in text.lower() or "новости" in text.lower():
-                news = get_latest_news()
-                await send_message(chat_id, news)
-                return {"ok": True}
+        # Картинка
+        if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
+            image_url = await generate_dalle(text)
+            async with httpx.AsyncClient() as client_http:
+                await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+            return {"ok": True}
 
-            completion = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": text}],
-                temperature=0.7
-            )
-            reply = completion.choices[0].message.content
-            await send_message(chat_id, reply)
+        # Новости
+        if "что нового" in text.lower() or "новости" in text.lower():
+            news = get_latest_news()
+            await send_message(chat_id, news)
+            return {"ok": True}
+
+        # История сообщений
+        history = user_histories.get(chat_id, [])
+        history.append({"role": "user", "content": text})
+        if len(history) > 20:
+            history = history[-20:]
+
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=history,
+            temperature=0.7
+        )
+        reply = completion.choices[0].message.content
+        history.append({"role": "assistant", "content": reply})
+        user_histories[chat_id] = history
+        await send_message(chat_id, reply)
 
     except Exception as e:
-        await send_message(chat_id, f"\u26a0\ufe0f Ошибка: {str(e)}")
+        await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
