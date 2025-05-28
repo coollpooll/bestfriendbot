@@ -12,6 +12,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+usage_counter = {}
 
 class TelegramMessage(BaseModel):
     update_id: int
@@ -61,7 +62,7 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "")
 
-        await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")  # 👈 Эта строка покажет твой ID в логах Render
+        await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")
 
         if text.startswith("/start"):
             await send_message(chat_id,
@@ -91,6 +92,17 @@ async def telegram_webhook(req: Request):
             else:
                 await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
         else:
+            user_id = str(chat_id)
+            is_owner = user_id == "520740282"
+
+            if not is_owner:
+                usage_key = f"user_usage:{user_id}"
+                count = usage_counter.get(usage_key, 0)
+                if count >= 3:
+                    await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
+                    return
+                usage_counter[usage_key] = count + 1
+
             completion = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": text}],
@@ -102,7 +114,8 @@ async def telegram_webhook(req: Request):
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
-    return {"ok": True}
+    return {"ok": True"}
+
 
 
 
