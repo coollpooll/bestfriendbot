@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 import json
-from serpapi import GoogleSearch
+from google_search_results import GoogleSearch
 
 app = FastAPI()
 
@@ -53,7 +53,7 @@ def get_latest_news():
     news_results = results.get("news_results", [])
     if not news_results:
         return "Не удалось получить свежие новости."
-    headlines = [f"• {item['title']}" for item in news_results[:5]]
+    headlines = [f"\u2022 {item['title']}" for item in news_results[:5]]
     return "\n".join(headlines)
 
 async def generate_dalle(prompt):
@@ -78,20 +78,20 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "")
 
-        await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")
+        await send_message(chat_id, f"\u2705 Твой chat_id: `{chat_id}`")
 
         if text.startswith("/start"):
             await send_message(chat_id, 
-                """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
+                """\ud83d\udc4b Привет, я BEST FRIEND \ud83e\udd16 \u2014 я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
 
-🎓 Заменяю любые платные курсы.
-🧠 Отвечаю как GPT-4.
-🎤 Говорю голосом.
-🎨 Рисую картинки.
-🎥 Скоро — видео.
+\ud83c\udf93 Заменяю любые платные курсы.
+\ud83e\udde0 Отвечаю как GPT-4.
+\ud83c\udfa4 Говорю голосом.
+\ud83c\udfa8 Рисую картинки.
+\ud83c\udfa5 Скоро \u2014 видео.
 
-🆓 3 запроса каждый день — бесплатно.
-💳 Подписка: 399₽/мес или 2990₽/год.
+\ud83c\udd7f\ufe0f 3 запроса каждый день \u2014 бесплатно.
+\ud83d\udcb3 Подписка: 399\u20bd/мес или 2990\u20bd/год.
 
 Начни с любого запроса. Я уже жду."""
             )
@@ -101,7 +101,7 @@ async def telegram_webhook(req: Request):
                 audio = await generate_speech(query)
                 await send_voice(chat_id, audio)
             else:
-                await send_message(chat_id, "🔊 Напиши что озвучить: `/скажи твой текст`")
+                await send_message(chat_id, "\ud83d\udd0a Напиши что озвучить: `/скажи твой текст`")
         else:
             user_id = str(chat_id)
             is_owner = user_id == "520740282"
@@ -110,7 +110,7 @@ async def telegram_webhook(req: Request):
                 usage_key = f"user_usage:{user_id}"
                 count = usage_counter.get(usage_key, 0)
                 if count >= 3:
-                    await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
+                    await send_message(chat_id, "\u274c Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399\u20bd и пользуйся без ограничений.")
                     return
                 usage_counter[usage_key] = count + 1
 
@@ -134,9 +134,10 @@ async def telegram_webhook(req: Request):
             await send_message(chat_id, reply)
 
     except Exception as e:
-        await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
+        await send_message(chat_id, f"\u26a0\ufe0f Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
