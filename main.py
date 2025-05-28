@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import httpx
 from serpapi import GoogleSearch
 from databases import Database
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hmac
 import hashlib
 
@@ -59,6 +59,7 @@ async def shutdown():
 class TelegramMessage(BaseModel):
     update_id: int
     message: dict = None
+    document: dict = None
 
 async def send_message(chat_id, text):
     async with httpx.AsyncClient() as client_http:
@@ -156,6 +157,33 @@ async def telegram_webhook(req: Request):
             ON CONFLICT (chat_id) DO NOTHING;
         """, {"chat_id": str(chat_id)})
 
+        if "document" in msg:
+            file_id = msg["document"]["file_id"]
+            async with httpx.AsyncClient() as client_http:
+                file_info = await client_http.get(f"{TELEGRAM_API}/getFile?file_id={file_id}")
+                file_path = file_info.json()["result"]["file_path"]
+                file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+
+            thread = client.beta.threads.create()
+            client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content="Пожалуйста, прочти файл",
+                file_urls=[file_url]
+            )
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=ASSISTANT_ID
+            )
+            while True:
+                run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+            messages = client.beta.threads.messages.list(thread_id=thread.id)
+            reply = messages.data[0].content[0].text.value
+            await send_message(chat_id, reply)
+            return {"ok": True}
+
         if text.startswith("/start"):
             await update_bot_commands()
             await send_message(chat_id,
@@ -244,6 +272,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
