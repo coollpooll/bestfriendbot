@@ -8,7 +8,7 @@ from serpapi import GoogleSearch
 app = FastAPI()
 
 BOT_TOKEN = "7699903458:AAEGl6YvcYpFTFh9-D61JSYeWGA9blqiOyc"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
 SERPAPI_KEY = "292bb3653ec4db2e9abc418bc91548b1fec768997bf9f1aec3937f426272ae29"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -114,7 +114,7 @@ async def telegram_webhook(req: Request):
                 return {"ok": True}
             usage_counter[usage_key] = count + 1
 
-        if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
+        if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение", "фото", "изображение"]):
             image_url = await generate_dalle(text)
             async with httpx.AsyncClient() as client_http:
                 await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
