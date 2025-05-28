@@ -49,17 +49,20 @@ def get_latest_news():
     news_results = results.get("news_results", [])
     if not news_results:
         return "Не удалось получить свежие новости."
-    headlines = [f"• {item['title']}" for item in news_results[:5]]
+    headlines = [f"\u2022 {item['title']}" for item in news_results[:5]]
     return "\n".join(headlines)
 
 async def generate_dalle(prompt):
-    response = client.images.generate(
-        model="dall-e-3",
-        prompt=prompt,
-        n=1,
-        size="1024x1024"
-    )
-    return response.data[0].url
+    try:
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            n=1,
+            size="1024x1024"
+        )
+        return response.data[0].url
+    except Exception as e:
+        return None
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
@@ -77,14 +80,14 @@ async def telegram_webhook(req: Request):
         if text.startswith("/start"):
             await update_bot_commands()
             await send_message(chat_id,
-                """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
+                """\U0001F44B Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
 
 🎓 Заменяю любые платные курсы.
 🧠 Отвечаю как GPT-4.
 🎨 Рисую картинки.
 🎥 Скоро — видео.
 
-🆓 3 запроса каждый день — бесплатно.
+🌀 3 запроса каждый день — бесплатно.
 💳 Подписка: 399₽/мес или 2990₽/год.
 
 Начни с любого запроса. Я уже жду."""
@@ -116,8 +119,11 @@ async def telegram_webhook(req: Request):
 
         if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение", "фото", "изображение"]):
             image_url = await generate_dalle(text)
-            async with httpx.AsyncClient() as client_http:
-                await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+            if image_url:
+                async with httpx.AsyncClient() as client_http:
+                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+            else:
+                await send_message(chat_id, "❌ Не удалось создать изображение. Попробуй переформулировать запрос.")
             return {"ok": True}
 
         if "что нового" in text.lower() or "новости" in text.lower():
@@ -145,6 +151,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
