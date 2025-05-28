@@ -8,6 +8,10 @@ from databases import Database
 from datetime import datetime, timezone, timedelta
 import hmac
 import hashlib
+from PIL import Image
+import pytesseract
+import tempfile
+import aiofiles
 
 app = FastAPI()
 
@@ -158,31 +162,43 @@ async def telegram_webhook(req: Request):
         """, {"chat_id": str(chat_id)})
 
         if "document" in msg:
-            file_id = msg["document"]["file_id"]
+            file = msg["document"]
+            file_id = file["file_id"]
+            file_name = file["file_name"]
             async with httpx.AsyncClient() as client_http:
                 file_info = await client_http.get(f"{TELEGRAM_API}/getFile?file_id={file_id}")
                 file_path = file_info.json()["result"]["file_path"]
                 file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
-            thread = client.beta.threads.create()
-            client.beta.threads.messages.create(
-                thread_id=thread.id,
-                role="user",
-                content="Пожалуйста, прочти файл",
-                file_urls=[file_url]
-            )
-            run = client.beta.threads.runs.create(
-                thread_id=thread.id,
-                assistant_id=ASSISTANT_ID
-            )
-            while True:
-                run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-                if run_status.status == "completed":
-                    break
-            messages = client.beta.threads.messages.list(thread_id=thread.id)
-            reply = messages.data[0].content[0].text.value
-            await send_message(chat_id, reply)
-            return {"ok": True}
+                if file_name.endswith(".png") or file_name.endswith(".jpg") or file_name.endswith(".jpeg"):
+                    async with client_http.stream("GET", file_url) as response:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as out_file:
+                            async for chunk in response.aiter_bytes():
+                                out_file.write(chunk)
+                            out_file_path = out_file.name
+                    text_extracted = pytesseract.image_to_string(Image.open(out_file_path))
+                    os.remove(out_file_path)
+                    text = text_extracted.strip()
+                else:
+                    thread = client.beta.threads.create()
+                    client.beta.threads.messages.create(
+                        thread_id=thread.id,
+                        role="user",
+                        content="Пожалуйста, прочти файл",
+                        file_urls=[file_url]
+                    )
+                    run = client.beta.threads.runs.create(
+                        thread_id=thread.id,
+                        assistant_id=ASSISTANT_ID
+                    )
+                    while True:
+                        run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                        if run_status.status == "completed":
+                            break
+                    messages = client.beta.threads.messages.list(thread_id=thread.id)
+                    reply = messages.data[0].content[0].text.value
+                    await send_message(chat_id, reply)
+                    return {"ok": True}
 
         if text.startswith("/start"):
             await update_bot_commands()
@@ -272,6 +288,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
