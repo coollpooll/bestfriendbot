@@ -3,11 +3,12 @@ import openai
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
+import json
 
 app = FastAPI()
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+BOT_TOKEN = "7699903458:AAEGl6YvcYpFTFh9-D61JSYeWGA9blqiOyc"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Не забудь указать в Render Env vars
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 openai.api_key = OPENAI_API_KEY
@@ -49,42 +50,48 @@ async def generate_dalle(prompt):
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     body = await req.json()
+    print(json.dumps(body, indent=2))  # Для отладки
     update = TelegramMessage(**body)
 
     if not update.message:
         return {"ok": True}
 
-    msg = update.message
-    chat_id = msg["chat"]["id"]
-    text = msg.get("text", "")
+    try:
+        msg = update.message
+        chat_id = msg["chat"]["id"]
+        text = msg.get("text", "")
 
-    if text.startswith("/start"):
-        await send_message(chat_id,
-            "👋 Привет! Я — BEST FRIEND 🤖\n\n"
-            "GPT-4 Turbo, голос, картинки и даже видео. 3 запроса — бесплатно. Подписка: 399₽/мес или 2990₽/год."
-        )
-    elif text.startswith("/скажи"):
-        query = text.replace("/скажи", "").strip()
-        if query:
-            audio = await generate_speech(query)
-            await send_voice(chat_id, audio)
+        if text.startswith("/start"):
+            await send_message(chat_id,
+                "👋 Привет! Я — *BEST FRIEND* 🤖\n\n"
+                "Я заменяю любые курсы: GPT-4, голос, картинки и видео. 3 запроса в день бесплатно.\n"
+                "Подписка: 399₽/мес или 2990₽/год. Начни с запроса!"
+            )
+        elif text.startswith("/скажи"):
+            query = text.replace("/скажи", "").strip()
+            if query:
+                audio = await generate_speech(query)
+                await send_voice(chat_id, audio)
+            else:
+                await send_message(chat_id, "🔊 Напиши что озвучить: `/скажи твой текст`")
+        elif text.startswith("/сгенерируй"):
+            prompt = text.replace("/сгенерируй", "").strip()
+            if prompt:
+                image_url = await generate_dalle(prompt)
+                async with httpx.AsyncClient() as client:
+                    await client.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+            else:
+                await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
         else:
-            await send_message(chat_id, "🔊 Напиши что озвучить: `/скажи твой текст`")
-    elif text.startswith("/сгенерируй"):
-        prompt = text.replace("/сгенерируй", "").strip()
-        if prompt:
-            image_url = await generate_dalle(prompt)
-            async with httpx.AsyncClient() as client:
-                await client.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
-        else:
-            await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
-    else:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[{"role": "user", "content": text}],
-            temperature=0.7
-        )
-        reply = completion.choices[0].message.content
-        await send_message(chat_id, reply)
+            completion = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": text}],
+                temperature=0.7
+            )
+            reply = completion.choices[0].message.content
+            await send_message(chat_id, reply)
+
+    except Exception as e:
+        await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
