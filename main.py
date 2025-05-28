@@ -87,4 +87,4 @@ async def telegram_webhook(req: Request):
         reply = completion.choices[0].message.content
         await send_message(chat_id, reply)
 
-    return {"ok": True"}
+    return {"ok": True}
