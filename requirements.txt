@@ -7,3 +7,4 @@ httpx
 serpapi
 google-search-results
 databases[postgresql]
+Pillow
