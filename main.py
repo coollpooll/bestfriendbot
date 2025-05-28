@@ -89,18 +89,19 @@ async def telegram_webhook(req: Request):
             else:
                 await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
         else:
-            completion = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": text}],
                 temperature=0.7
             )
-            reply = completion.choices[0].message.content
+            reply = response.choices[0].message.content
             await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
