@@ -61,7 +61,7 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "")
 
-        print(f"CHAT_ID: {chat_id}")  # 👈 Эта строка покажет твой ID в логах Render
+        await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")  # 👈 Эта строка покажет твой ID в логах Render
 
         if text.startswith("/start"):
             await send_message(chat_id,
