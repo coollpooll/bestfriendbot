@@ -1,9 +1,10 @@
 import os
-import json
-import httpx
 from openai import OpenAI
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
+import httpx
+import json
+from serpapi import GoogleSearch
 
 app = FastAPI()
 
@@ -40,23 +41,20 @@ async def generate_speech(text):
     )
     return await response.read()
 
-async def get_latest_news():
-    url = "https://serpapi.com/search"
+def get_latest_news():
     params = {
         "q": "новости",
         "hl": "ru",
         "gl": "ru",
-        "api_key": SERPAPI_KEY,
-        "engine": "google"
+        "api_key": SERPAPI_KEY
     }
-    async with httpx.AsyncClient() as client_http:
-        response = await client_http.get(url, params=params)
-        data = response.json()
-        news_results = data.get("news_results", [])
-        if not news_results:
-            return "Не удалось получить свежие новости."
-        headlines = [f"• {item['title']}" for item in news_results[:5]]
-        return "\n".join(headlines)
+    search = GoogleSearch(params)
+    results = search.get_dict()
+    news_results = results.get("news_results", [])
+    if not news_results:
+        return "Не удалось получить свежие новости."
+    headlines = [f"• {item['title']}" for item in news_results[:5]]
+    return "\n".join(headlines)
 
 async def generate_dalle(prompt):
     response = client.images.generate(
@@ -70,7 +68,6 @@ async def generate_dalle(prompt):
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     body = await req.json()
-    print(json.dumps(body, indent=2))
     update = TelegramMessage(**body)
 
     if not update.message:
@@ -81,24 +78,22 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "")
 
+        await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")
+
         if text.startswith("/start"):
-            await send_message(chat_id,
-                "👋 Привет, я BEST FRIEND 🤖 — твой личный ИИ.
-\n\n"
-                "🎓 Заменяю любые платные курсы.
-"
-                "🧠 Отвечаю как GPT-4.
-"
-                "🎤 Говорю голосом.
-"
-                "🎨 Рисую картинки.
-"
-                "🎥 Скоро — видео.
-\n\n"
-                "🆓 3 запроса каждый день — бесплатно.
-"
-                "💳 Подписка: 399₽/мес или 2990₽/год.\n\n"
-                "Начни с любого запроса. Я уже жду."
+            await send_message(chat_id, 
+                """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
+
+🎓 Заменяю любые платные курсы.
+🧠 Отвечаю как GPT-4.
+🎤 Говорю голосом.
+🎨 Рисую картинки.
+🎥 Скоро — видео.
+
+🆓 3 запроса каждый день — бесплатно.
+💳 Подписка: 399₽/мес или 2990₽/год.
+
+Начни с любого запроса. Я уже жду."""
             )
         elif text.startswith("/скажи"):
             query = text.replace("/скажи", "").strip()
@@ -126,7 +121,7 @@ async def telegram_webhook(req: Request):
                 return {"ok": True}
 
             if "что нового" in text.lower() or "новости" in text.lower():
-                news = await get_latest_news()
+                news = get_latest_news()
                 await send_message(chat_id, news)
                 return {"ok": True}
 
@@ -142,5 +137,6 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
