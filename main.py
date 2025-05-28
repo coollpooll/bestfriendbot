@@ -31,7 +31,8 @@ async def send_message(chat_id, text):
 async def update_bot_commands():
     commands = [
         {"command": "start", "description": "Запуск бота"},
-        # другие команды можешь добавить сюда
+        {"command": "sub", "description": "Подписка"},
+        {"command": "help", "description": "Инструкция"}
     ]
     async with httpx.AsyncClient() as client_http:
         await client_http.post(f"{TELEGRAM_API}/setMyCommands", json={"commands": commands})
@@ -90,50 +91,63 @@ async def telegram_webhook(req: Request):
 
 Начни с любого запроса. Я уже жду."""
             )
-        else:
-            user_id = str(chat_id)
-            is_owner = user_id == "520740282"
+            return {"ok": True}
 
-            if not is_owner:
-                usage_key = f"user_usage:{user_id}"
-                count = usage_counter.get(usage_key, 0)
-                if count >= 3:
-                    await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
-                    return
-                usage_counter[usage_key] = count + 1
-
-            if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
-                image_url = await generate_dalle(text)
-                async with httpx.AsyncClient() as client_http:
-                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
-                return {"ok": True}
-
-            if "что нового" in text.lower() or "новости" in text.lower():
-                news = get_latest_news()
-                await send_message(chat_id, news)
-                return {"ok": True}
-
-            # Добавим память
-            history = chat_histories.get(user_id, [])
-            history.append({"role": "user", "content": text})
-            if len(history) > 20:
-                history = history[-20:]
-
-            completion = client.chat.completions.create(
-                model="gpt-4o",
-                messages=history,
-                temperature=0.7
+        if text.startswith("/sub"):
+            await send_message(chat_id, 
+                "💳 *Подписка*\n\nОформи подписку и получи безлимитный доступ:\n• 399₽ в месяц\n• 2990₽ в год\n\nПереходи в настройки и оплати прямо здесь (скоро будет доступно)."
             )
-            reply = completion.choices[0].message.content
-            history.append({"role": "assistant", "content": reply})
-            chat_histories[user_id] = history
+            return {"ok": True}
 
-            await send_message(chat_id, reply)
+        if text.startswith("/help"):
+            await send_message(chat_id,
+                "ℹ️ *Инструкция*\n\nПросто напиши свой вопрос, и я отвечу.\n\nЯ могу:\n• Заменить любые платные курсы\n• Отвечать как GPT-4\n• Создавать изображения\n• В будущем — видео\n\nПервые 3 запроса в день — бесплатно."
+            )
+            return {"ok": True}
+
+        user_id = str(chat_id)
+        is_owner = user_id == "520740282"
+
+        if not is_owner:
+            usage_key = f"user_usage:{user_id}"
+            count = usage_counter.get(usage_key, 0)
+            if count >= 3:
+                await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
+                return {"ok": True}
+            usage_counter[usage_key] = count + 1
+
+        if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
+            image_url = await generate_dalle(text)
+            async with httpx.AsyncClient() as client_http:
+                await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+            return {"ok": True}
+
+        if "что нового" in text.lower() or "новости" in text.lower():
+            news = get_latest_news()
+            await send_message(chat_id, news)
+            return {"ok": True}
+
+        history = chat_histories.get(user_id, [])
+        history.append({"role": "user", "content": text})
+        if len(history) > 20:
+            history = history[-20:]
+
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=history,
+            temperature=0.7
+        )
+        reply = completion.choices[0].message.content
+        history.append({"role": "assistant", "content": reply})
+        chat_histories[user_id] = history
+
+        await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
