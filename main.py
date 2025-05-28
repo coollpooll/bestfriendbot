@@ -83,14 +83,6 @@ async def telegram_webhook(req: Request):
                 await send_voice(chat_id, audio)
             else:
                 await send_message(chat_id, "🔊 Напиши что озвучить: `/скажи твой текст`")
-        elif text.startswith("/сгенерируй"):
-            prompt = text.replace("/сгенерируй", "").strip()
-            if prompt:
-                image_url = await generate_dalle(prompt)
-                async with httpx.AsyncClient() as client_http:
-                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
-            else:
-                await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
         else:
             user_id = str(chat_id)
             is_owner = user_id == "520740282"
@@ -102,6 +94,13 @@ async def telegram_webhook(req: Request):
                     await send_message(chat_id, "❌ Лимит исчерпан. 3 запроса в день бесплатно.\n\nОформи подписку за 399₽ и пользуйся без ограничений.")
                     return
                 usage_counter[usage_key] = count + 1
+
+            # Проверка: если в сообщении есть слова, связанные с генерацией изображений
+            if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
+                image_url = await generate_dalle(text)
+                async with httpx.AsyncClient() as client_http:
+                    await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+                return {"ok": True}
 
             completion = client.chat.completions.create(
                 model="gpt-4o",
@@ -115,13 +114,3 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
-
-
-
-
-
-
-
-
-
-
