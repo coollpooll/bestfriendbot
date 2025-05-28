@@ -1,15 +1,16 @@
 import os
-import asyncio
 from openai import OpenAI
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 import json
+import serpapi
 
 app = FastAPI()
 
 BOT_TOKEN = "7699903458:AAEGl6YvcYpFTFh9-D61JSYeWGA9blqiOyc"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SERPAPI_KEY = "292bb3653ec4db2e9abc418bc91548b1fec768997bf9f1aec3937f426272ae29"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -40,7 +41,22 @@ async def generate_speech(text):
     )
     return await response.read()
 
-def generate_dalle(prompt):
+def get_latest_news():
+    params = {
+        "q": "новости",
+        "hl": "ru",
+        "gl": "ru",
+        "api_key": SERPAPI_KEY
+    }
+    search = serpapi.GoogleSearch(params)
+    results = search.get_dict()
+    news_results = results.get("news_results", [])
+    if not news_results:
+        return "Не удалось получить свежие новости."
+    headlines = [f"• {item['title']}" for item in news_results[:5]]
+    return "\n".join(headlines)
+
+async def generate_dalle(prompt):
     response = client.images.generate(
         model="dall-e-3",
         prompt=prompt,
@@ -96,12 +112,15 @@ async def telegram_webhook(req: Request):
                     return
                 usage_counter[usage_key] = count + 1
 
-            # Проверка на генерацию изображения по содержанию текста
             if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
-                loop = asyncio.get_event_loop()
-                image_url = await loop.run_in_executor(None, lambda: generate_dalle(text))
+                image_url = await generate_dalle(text)
                 async with httpx.AsyncClient() as client_http:
                     await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
+                return {"ok": True}
+
+            if "что нового" in text.lower() or "новости" in text.lower():
+                news = get_latest_news()
+                await send_message(chat_id, news)
                 return {"ok": True}
 
             completion = client.chat.completions.create(
@@ -116,4 +135,5 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
