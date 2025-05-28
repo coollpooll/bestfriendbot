@@ -104,6 +104,26 @@ async def telegram_webhook(req: Request):
             await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
             return {"ok": True}
 
+        if text:
+            thread = client.beta.threads.create()
+            client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=text
+            )
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=ASSISTANT_ID
+            )
+            while True:
+                run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+            messages = client.beta.threads.messages.list(thread_id=thread.id)
+            reply = messages.data[0].content[0].text.value
+            await send_message(chat_id, reply)
+            return {"ok": True}
+
         if "document" in msg:
             file = msg["document"]
             file_id = file["file_id"]
@@ -137,6 +157,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
