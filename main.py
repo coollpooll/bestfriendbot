@@ -3,7 +3,6 @@ from openai import OpenAI
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
-import json
 from serpapi import GoogleSearch
 
 app = FastAPI()
@@ -28,6 +27,14 @@ async def send_message(chat_id, text):
             "text": text,
             "parse_mode": "Markdown"
         })
+
+async def update_bot_commands():
+    commands = [
+        {"command": "start", "description": "Запуск бота"},
+        # другие команды можешь добавить сюда
+    ]
+    async with httpx.AsyncClient() as client_http:
+        await client_http.post(f"{TELEGRAM_API}/setMyCommands", json={"commands": commands})
 
 def get_latest_news():
     params = {
@@ -69,6 +76,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"✅ Твой chat_id: `{chat_id}`")
 
         if text.startswith("/start"):
+            await update_bot_commands()
             await send_message(chat_id, 
                 """👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который не ищет в тебе выгоду, не уговаривает, не льстит.
 
@@ -126,6 +134,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
