@@ -36,7 +36,7 @@ async def generate_speech(text):
         voice="onyx",
         input=text
     )
-    return await response.aread()
+    return response.content
 
 async def generate_dalle(prompt):
     response = await client.images.generate(
@@ -50,7 +50,7 @@ async def generate_dalle(prompt):
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     body = await req.json()
-    print(json.dumps(body, indent=2))
+    print(json.dumps(body, indent=2))  # Для отладки
     update = TelegramMessage(**body)
 
     if not update.message:
@@ -89,18 +89,19 @@ async def telegram_webhook(req: Request):
             else:
                 await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
         else:
-            chat_response = await client.chat.completions.create(
-                model="gpt-4",
+            completion = await client.chat.completions.create(
+                model="gpt-4o",
                 messages=[{"role": "user", "content": text}],
                 temperature=0.7
             )
-            reply = chat_response.choices[0].message.content
+            reply = completion.choices[0].message.content
             await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
