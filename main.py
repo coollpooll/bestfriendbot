@@ -114,7 +114,7 @@ async def telegram_webhook(req: Request):
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
-    return {"ok": True"}
+    return {"ok": True}
 
 
 
