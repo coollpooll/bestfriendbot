@@ -8,7 +8,7 @@ import json
 app = FastAPI()
 
 BOT_TOKEN = "7699903458:AAEGl6YvcYpFTFh9-D61JSYeWGA9blqiOyc"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Укажи переменную окружения в Render
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -31,15 +31,15 @@ async def send_voice(chat_id, audio_bytes):
         await client_http.post(f"{TELEGRAM_API}/sendVoice", data={"chat_id": chat_id}, files=files)
 
 async def generate_speech(text):
-    response = client.audio.speech.create(
+    response = await client.audio.speech.create(
         model="tts-1",
         voice="onyx",
         input=text
     )
-    return response.content
+    return await response.aread()
 
 async def generate_dalle(prompt):
-    response = client.images.generate(
+    response = await client.images.generate(
         model="dall-e-3",
         prompt=prompt,
         n=1,
@@ -50,7 +50,7 @@ async def generate_dalle(prompt):
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     body = await req.json()
-    print(json.dumps(body, indent=2))  # Для отладки
+    print(json.dumps(body, indent=2))
     update = TelegramMessage(**body)
 
     if not update.message:
@@ -89,17 +89,18 @@ async def telegram_webhook(req: Request):
             else:
                 await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
         else:
-            completion = client.chat.completions.create(
-                model="gpt-4o",
+            chat_response = await client.chat.completions.create(
+                model="gpt-4",
                 messages=[{"role": "user", "content": text}],
                 temperature=0.7
             )
-            reply = completion.choices[0].message.content
+            reply = chat_response.choices[0].message.content
             await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
