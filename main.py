@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 import json
-from google_search_results import GoogleSearch
+from serpapi import GoogleSearch
 
 app = FastAPI()
 
