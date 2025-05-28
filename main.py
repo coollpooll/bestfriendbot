@@ -1,12 +1,28 @@
-
 from fastapi import FastAPI, Request
-import uvicorn
+import requests
 
 app = FastAPI()
 
-@app.get("/")
-def root():
-    return {"status": "Bot is running"}
+TELEGRAM_TOKEN = "7699903458:AAEGl6YvcYpFTFh9-D61JSYeWGA9blqiOyc"
+API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+        
+        if text == "/start":
+            welcome = (
+                "👋 Привет! Я твой BEST FRIEND — ИИ-бот, который заменяет любые платные курсы.\n"
+                "Отвечаю голосом, текстом, создаю картинки, обучаю по шагам.\n"
+                "💸 3 запроса в день — бесплатно. Подписка: 399₽ в месяц или 3990₽ в год.\n"
+                "Без воды, без инфоцыган.\n"
+                "Попробуй прямо сейчас — спроси, и я сделаю для тебя личный курс!"
+            )
+            requests.post(API_URL, json={"chat_id": chat_id, "text": welcome})
+    
+    return {"ok": True}
+
