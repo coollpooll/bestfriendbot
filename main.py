@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 import json
+from asyncio import to_thread
 
 app = FastAPI()
 
@@ -63,7 +64,7 @@ async def telegram_webhook(req: Request):
 
         if text.startswith("/start"):
             await send_message(chat_id,
-                "👋 Привет,я BEST FRIEND 🤖 — я твой личный ИИ, который делает не ищет в тебе выгоду, не уговаривает, не льстит.\n\n"
+                "👋 Привет, я BEST FRIEND 🤖 — я твой личный ИИ, который делает не ищет в тебе выгоду, не уговаривает, не льстит.\n\n"
                 "🎓 Заменяю любые платные курсы.\n"
                 "🧠 Отвечаю как GPT-4.\n"
                 "🎤 Говорю голосом.\n"
@@ -88,19 +89,28 @@ async def telegram_webhook(req: Request):
                     await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
             else:
                 await send_message(chat_id, "🖼 Введи запрос: `/сгенерируй девушка в балаклаве на фоне города`")
+        elif text.startswith("/подписка"):
+            await send_message(chat_id,
+                "💳 Подписка на BEST FRIEND:\n\n"
+                "— *399₽/мес* или *2990₽/год*\n"
+                "— Оплата через [CloudPayments]\n\n"
+                "🎁 Первый месяц можно протестировать — 3 запроса в день бесплатно!\n\n"
+                "_(ссылка на оплату скоро будет доступна)_"
+            )
         else:
-            response = await client.chat.completions.create(
+            completion = await to_thread(client.chat.completions.create,
                 model="gpt-4o",
                 messages=[{"role": "user", "content": text}],
                 temperature=0.7
             )
-            reply = response.choices[0].message.content
+            reply = completion.choices[0].message.content
             await send_message(chat_id, reply)
 
     except Exception as e:
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
