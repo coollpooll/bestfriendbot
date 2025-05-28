@@ -1,4 +1,5 @@
 import os
+import asyncio
 from openai import OpenAI
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
@@ -39,8 +40,8 @@ async def generate_speech(text):
     )
     return await response.read()
 
-async def generate_dalle(prompt):
-    response = await client.images.generate(
+def generate_dalle(prompt):
+    response = client.images.generate(
         model="dall-e-3",
         prompt=prompt,
         n=1,
@@ -95,9 +96,10 @@ async def telegram_webhook(req: Request):
                     return
                 usage_counter[usage_key] = count + 1
 
-            # Проверка: если в сообщении есть слова, связанные с генерацией изображений
+            # Проверка на генерацию изображения по содержанию текста
             if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "сделай картинку", "покажи изображение"]):
-                image_url = await generate_dalle(text)
+                loop = asyncio.get_event_loop()
+                image_url = await loop.run_in_executor(None, lambda: generate_dalle(text))
                 async with httpx.AsyncClient() as client_http:
                     await client_http.post(f"{TELEGRAM_API}/sendPhoto", json={"chat_id": chat_id, "photo": image_url})
                 return {"ok": True}
@@ -114,3 +116,4 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
