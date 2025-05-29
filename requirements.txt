@@ -4,9 +4,4 @@ requests
 python-telegram-bot==13.15
 openai
 httpx
-serpapi
-google-search-results
-databases[postgresql]
-Pillow
-aiofiles
-PyPDF2>=3.0.0
+
