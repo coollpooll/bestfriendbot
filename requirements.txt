@@ -9,3 +9,4 @@ google-search-results
 databases[postgresql]
 Pillow
 aiofiles
+PyPDF2>=3.0.0
