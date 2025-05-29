@@ -22,12 +22,13 @@ CLOUDPAYMENTS_SECRET = os.getenv("CLOUDPAYMENTS_SECRET", "your_cloudpayments_sec
 DATABASE_URL = "postgresql://bestfriend_db_user:Cm0DfEpdc2wvTPqrFd29ArMyJY4XYh5C@dpg-d0rmt7h5pdvs73a6h9m0-a/bestfriend_db"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-OWNER_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+OWNER_CHAT_ID = "507316527"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 database = Database(DATABASE_URL)
 usage_counter = {}
 chat_histories = {}
+started_users = set()
 
 @app.on_event("startup")
 async def startup():
@@ -113,7 +114,9 @@ async def telegram_webhook(req: Request):
             thread = client.beta.threads.retrieve(chat_histories[chat_id]["thread_id"])
 
         if text == "/start":
-            await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
+            if chat_id not in started_users:
+                await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
+                started_users.add(chat_id)
             return {"ok": True}
 
         if text == "/admin":
@@ -185,6 +188,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
