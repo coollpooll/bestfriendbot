@@ -22,7 +22,7 @@ CLOUDPAYMENTS_SECRET = os.getenv("CLOUDPAYMENTS_SECRET", "your_cloudpayments_sec
 DATABASE_URL = "postgresql://bestfriend_db_user:Cm0DfEpdc2wvTPqrFd29ArMyJY4XYh5C@dpg-d0rmt7h5pdvs73a6h9m0-a/bestfriend_db"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-OWNER_CHAT_ID = 520740282  # Updated to new Telegram ID
+OWNER_CHAT_ID = 520740282
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 database = Database(DATABASE_URL)
@@ -33,14 +33,17 @@ started_users = set()
 @app.on_event("startup")
 async def startup():
     await database.connect()
-    await database.execute("""
+    await database.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             chat_id TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-    """)
-    await database.execute("""
+        """
+    )
+    await database.execute(
+        """
         CREATE TABLE IF NOT EXISTS subscriptions (
             id SERIAL PRIMARY KEY,
             chat_id TEXT UNIQUE,
@@ -49,14 +52,17 @@ async def startup():
             transaction_id TEXT,
             payment_method TEXT
         );
-    """)
-    await database.execute("""
+        """
+    )
+    await database.execute(
+        """
         CREATE TABLE IF NOT EXISTS usage_log (
             id SERIAL PRIMARY KEY,
             chat_id TEXT,
             used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-    """)
+        """
+    )
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -69,11 +75,10 @@ class TelegramMessage(BaseModel):
 
 async def send_message(chat_id, text):
     async with httpx.AsyncClient() as client_http:
-        await client_http.post(f"{TELEGRAM_API}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown"
-        })
+        await client_http.post(
+            f"{TELEGRAM_API}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+        )
 
 async def update_bot_commands():
     commands = [
@@ -83,7 +88,10 @@ async def update_bot_commands():
         {"command": "admin", "description": "Статистика (только для владельца)"}
     ]
     async with httpx.AsyncClient() as client_http:
-        await client_http.post(f"{TELEGRAM_API}/setMyCommands", json={"commands": commands})
+        await client_http.post(
+            f"{TELEGRAM_API}/setMyCommands",
+            json={"commands": commands}
+        )
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
@@ -98,27 +106,31 @@ async def telegram_webhook(req: Request):
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "").strip()
 
-        await database.execute("""
-            INSERT INTO users (chat_id) VALUES (:chat_id)
-            ON CONFLICT (chat_id) DO NOTHING;
-        """, {"chat_id": str(chat_id)})
+        # Register user and log usage
+        await database.execute(
+            "INSERT INTO users (chat_id) VALUES (:chat_id) ON CONFLICT (chat_id) DO NOTHING;",
+            {"chat_id": str(chat_id)}
+        )
+        await database.execute(
+            "INSERT INTO usage_log (chat_id) VALUES (:chat_id);",
+            {"chat_id": str(chat_id)}
+        )
 
-        await database.execute("""
-            INSERT INTO usage_log (chat_id) VALUES (:chat_id);
-        """, {"chat_id": str(chat_id)})
-
+        # Initialize or retrieve conversation thread
         if chat_id not in chat_histories:
             thread = client.beta.threads.create()
             chat_histories[chat_id] = {"thread_id": thread.id}
         else:
             thread = client.beta.threads.retrieve(chat_histories[chat_id]["thread_id"])
 
+        # Handle /start
         if text == "/start":
             if chat_id not in started_users:
                 await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
                 started_users.add(chat_id)
             return {"ok": True}
 
+        # Handle /admin
         if text == "/admin":
             if chat_id != OWNER_CHAT_ID:
                 await send_message(chat_id, "⛔ У тебя нет доступа к этой команде.")
@@ -129,8 +141,7 @@ async def telegram_webhook(req: Request):
             active_subs = await database.fetch_val("SELECT COUNT(*) FROM subscriptions WHERE is_active = true;")
 
             message = (
-                f"📊 *Статистика:*
-\n"
+                "📊 *Статистика:*\n"
                 f"👥 Пользователей: {total_users}\n"
                 f"📨 Запросов: {total_requests}\n"
                 f"💳 Активных подписок: {active_subs}"
@@ -138,6 +149,7 @@ async def telegram_webhook(req: Request):
             await send_message(chat_id, message)
             return {"ok": True}
 
+        # Handle regular text queries
         if text:
             client.beta.threads.messages.create(
                 thread_id=thread.id,
@@ -149,7 +161,10 @@ async def telegram_webhook(req: Request):
                 assistant_id=ASSISTANT_ID
             )
             while True:
-                run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread.id,
+                    run_id=run.id
+                )
                 if run_status.status == "completed":
                     break
             messages = client.beta.threads.messages.list(thread_id=thread.id)
@@ -157,16 +172,17 @@ async def telegram_webhook(req: Request):
             await send_message(chat_id, reply)
             return {"ok": True}
 
+        # Handle document uploads
         if "document" in msg:
             file = msg["document"]
             file_id = file["file_id"]
-            file_name = file["file_name"]
+            file_name = file.get("file_name")
             async with httpx.AsyncClient() as client_http:
                 file_info = await client_http.get(f"{TELEGRAM_API}/getFile?file_id={file_id}")
                 file_path = file_info.json()["result"]["file_path"]
                 file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
-            message = client.beta.threads.messages.create(
+            client.beta.threads.messages.create(
                 thread_id=thread.id,
                 role="user",
                 content="Пожалуйста, прочти файл.",
@@ -177,7 +193,10 @@ async def telegram_webhook(req: Request):
                 assistant_id=ASSISTANT_ID
             )
             while True:
-                run_status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread.id,
+                    run_id=run.id
+                )
                 if run_status.status == "completed":
                     break
             messages = client.beta.threads.messages.list(thread_id=thread.id)
@@ -189,5 +208,6 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
