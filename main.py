@@ -3,7 +3,7 @@ from openai import OpenAI
 from fastapi import FastAPI, Request, UploadFile, File
 from pydantic import BaseModel
 import httpx
-from serpapi import GoogleSearch
+from serpapi import Client
 from databases import Database
 import aiofiles
 import PyPDF2
@@ -14,7 +14,7 @@ app = FastAPI()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID", "asst_uPuKSO4il3oJodGZUsLWH974")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY", "your_serpapi_key")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "292bb3653ec4db2e9abc418bc91548b1fec768997bf9f1aec3937f426272ae29")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "520740282"))
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -211,11 +211,23 @@ async def telegram_webhook(req: Request):
             )
         return {"ok": True}
 
-    # News via SerpAPI
+    # News via SerpAPI — заменено, теперь только Client!
     if any(w in text.lower() for w in ["что нового", "новости"]):
-        params = {"q": "новости", "hl": "ru", "gl": "ru", "api_key": SERPAPI_KEY}
-        results = GoogleSearch(params).get_dict().get("news_results", [])
-        news = "Не удалось получить новости." if not results else "\n".join(f"• {i['title']}" for i in results[:5])
+        serpapi_key = SERPAPI_KEY
+        params = {
+            "engine": "google_news",
+            "q": "новости",
+            "hl": "ru",
+            "gl": "ru",
+            "api_key": serpapi_key
+        }
+        serp_client = Client(api_key=serpapi_key)
+        try:
+            response = serp_client.search(params)
+            news_results = response.get("news_results", [])
+            news = "Не удалось получить новости." if not news_results else "\n".join(f"• {n['title']}" for n in news_results[:5])
+        except Exception as e:
+            news = "Ошибка при получении новостей."
         await send_message(chat_id, news)
         return {"ok": True}
 
@@ -230,6 +242,7 @@ async def telegram_webhook(req: Request):
     reply = msgs.data[-1].content[0].text.value
     await send_message(chat_id, reply)
     return {"ok": True}
+
 
 
 
