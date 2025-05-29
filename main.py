@@ -100,11 +100,19 @@ async def telegram_webhook(req: Request):
             ON CONFLICT (chat_id) DO NOTHING;
         """, {"chat_id": str(chat_id)})
 
+        await database.execute("""
+            INSERT INTO usage_log (chat_id) VALUES (:chat_id);
+        """, {"chat_id": str(chat_id)})
+
+        if chat_id not in chat_histories:
+            chat_histories[chat_id] = []
+
         if text == "/start":
             await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
             return {"ok": True}
 
         if text:
+            chat_histories[chat_id].append({"role": "user", "content": text})
             thread = client.beta.threads.create()
             client.beta.threads.messages.create(
                 thread_id=thread.id,
@@ -121,6 +129,7 @@ async def telegram_webhook(req: Request):
                     break
             messages = client.beta.threads.messages.list(thread_id=thread.id)
             reply = messages.data[0].content[0].text.value
+            chat_histories[chat_id].append({"role": "assistant", "content": reply})
             await send_message(chat_id, reply)
             return {"ok": True}
 
@@ -157,6 +166,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
 
 
