@@ -22,7 +22,7 @@ CLOUDPAYMENTS_SECRET = os.getenv("CLOUDPAYMENTS_SECRET", "your_cloudpayments_sec
 DATABASE_URL = "postgresql://bestfriend_db_user:Cm0DfEpdc2wvTPqrFd29ArMyJY4XYh5C@dpg-d0rmt7h5pdvs73a6h9m0-a/bestfriend_db"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-OWNER_CHAT_ID = 507316527  # Integer, not string
+OWNER_CHAT_ID = 520740282  # Updated to new Telegram ID
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 database = Database(DATABASE_URL)
@@ -129,7 +129,8 @@ async def telegram_webhook(req: Request):
             active_subs = await database.fetch_val("SELECT COUNT(*) FROM subscriptions WHERE is_active = true;")
 
             message = (
-                f"📊 *Статистика:*\n\n"
+                f"📊 *Статистика:*
+\n"
                 f"👥 Пользователей: {total_users}\n"
                 f"📨 Запросов: {total_requests}\n"
                 f"💳 Активных подписок: {active_subs}"
@@ -188,4 +189,5 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, f"⚠️ Ошибка: {str(e)}")
 
     return {"ok": True}
+
 
