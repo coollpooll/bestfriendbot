@@ -1,6 +1,7 @@
 import os
+import re
 from openai import OpenAI
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 from serpapi import Client
@@ -117,19 +118,32 @@ async def telegram_webhook(req: Request):
     if doc := msg.get("document"):
         file_id = doc.get("file_id")
         file_name = doc.get("file_name", "file")
-        dest = f"/tmp/{file_id}_{file_name}"
+        # Безопасное имя файла (латиница, цифры, точки, нижние подчёркивания и тире)
+        safe_file_name = re.sub(r'[^A-Za-z0-9._-]', '_', file_name)
+        dest = f"/tmp/{file_id}_{safe_file_name}"
         await download_telegram_file(file_id, dest)
         await send_message(chat_id, f"✅ Файл *{file_name}* получен и сохранён.")
         ext = file_name.lower().split('.')[-1]
         if ext in ('pdf', 'txt'):
             text_content = ''
             if ext == 'pdf':
-                reader = PyPDF2.PdfReader(dest)
-                for page in reader.pages:
-                    text_content += (page.extract_text() or '') + '\n'
+                try:
+                    if not os.path.exists(dest):
+                        await send_message(chat_id, f"❌ Ошибка: файл {file_name} не найден для чтения.")
+                        return {"ok": True}
+                    reader = PyPDF2.PdfReader(dest)
+                    for page in reader.pages:
+                        text_content += (page.extract_text() or '') + '\n'
+                except Exception as e:
+                    await send_message(chat_id, f"❌ Не удалось обработать PDF: {e}")
+                    return {"ok": True}
             else:
-                async with aiofiles.open(dest, 'r', encoding='utf-8') as f:
-                    text_content = await f.read()
+                try:
+                    async with aiofiles.open(dest, 'r', encoding='utf-8') as f:
+                        text_content = await f.read()
+                except Exception as e:
+                    await send_message(chat_id, f"❌ Не удалось прочитать файл: {e}")
+                    return {"ok": True}
             snippet = text_content[:2000]
             summary_resp = client.chat.completions.create(
                 model="gpt-4o",
@@ -137,6 +151,11 @@ async def telegram_webhook(req: Request):
             )
             summary = summary_resp.choices[0].message.content
             await send_message(chat_id, f"📄 Резюме документа:\n{summary}")
+        # Чистим файл
+        try:
+            os.remove(dest)
+        except:
+            pass
         return {"ok": True}
 
     # Photo handling
@@ -145,6 +164,11 @@ async def telegram_webhook(req: Request):
         dest = f"/tmp/{file_id}.jpg"
         await download_telegram_file(file_id, dest)
         await send_message(chat_id, "✅ Фото получено и сохранено.")
+        # Можно удалить, если не нужен — чистим место
+        try:
+            os.remove(dest)
+        except:
+            pass
         return {"ok": True}
 
     # Log user and usage if DB enabled
@@ -181,7 +205,6 @@ async def telegram_webhook(req: Request):
         return {"ok": True}
 
     if text == "/admin":
-        # Теперь команда /admin доступна всем, но статистика — только для владельца
         if chat_id != OWNER_CHAT_ID:
             await send_message(chat_id, "⛔ У тебя нет доступа к этой команде.")
             return {"ok": True}
@@ -211,7 +234,7 @@ async def telegram_webhook(req: Request):
             )
         return {"ok": True}
 
-    # News via SerpAPI — заменено, теперь только Client!
+    # News via SerpAPI (только Client, никаких GoogleSearch!)
     if any(w in text.lower() for w in ["что нового", "новости"]):
         serpapi_key = SERPAPI_KEY
         params = {
@@ -242,15 +265,3 @@ async def telegram_webhook(req: Request):
     reply = msgs.data[-1].content[0].text.value
     await send_message(chat_id, reply)
     return {"ok": True}
-
-
-
-
-
-
-
-
-
-
-
-
