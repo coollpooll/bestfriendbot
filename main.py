@@ -78,16 +78,13 @@ async def send_message(chat_id: int, text: str):
 
 async def download_telegram_file(file_id: str, dest_path: str) -> None:
     async with httpx.AsyncClient() as client_http:
-        # get file path
         r = await client_http.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id})
         result = r.json().get("result", {})
         file_path = result.get("file_path")
         if not file_path:
             return
-        # download file
         file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
         resp = await client_http.get(file_url)
-        # save to dest_path
         async with aiofiles.open(dest_path, 'wb') as f:
             await f.write(resp.content)
 
@@ -115,36 +112,37 @@ async def telegram_webhook(req: Request):
     text = msg.get("text", "").strip()
 
     # Document or file upload
-    if doc := msg.get("document"):  # generic file
+    if doc := msg.get("document"):
         file_id = doc.get("file_id")
         file_name = doc.get("file_name", "file")
         dest = f"/tmp/{file_id}_{file_name}"
         await download_telegram_file(file_id, dest)
         await send_message(chat_id, f"✅ Файл *{file_name}* получен и сохранён.")
-        # If PDF or text, extract and summarize via OpenAI
         ext = file_name.lower().split('.')[-1]
-        if ext == 'pdf' or ext == 'txt':
+        if ext in ('pdf', 'txt'):
             text_content = ''
             if ext == 'pdf':
                 reader = PyPDF2.PdfReader(dest)
                 for page in reader.pages:
-                    page_text = page.extract_text() or ''
-                    text_content += page_text + '\n'
+                    text_content += (page.extract_text() or '') + '\n'
             else:
                 async with aiofiles.open(dest, 'r', encoding='utf-8') as f:
                     text_content = await f.read()
-            # trim content to first 2000 chars
             snippet = text_content[:2000]
-            summary = client.chat.completions.create(
+            summary_resp = client.chat.completions.create(
                 model="gpt-4o",
-                messages=[{"role": "user", "content": f"Пожалуйста, дай краткий анализ или резюме содержимого этого документа:
-{snippet}"}]
-            ).choices[0].message.content
+                messages=[{
+                    "role": "user",
+                    "content": f"""Пожалуйста, дай краткий анализ или резюме содержимого этого документа:
+{snippet}"""
+                }]
+            )
+            summary = summary_resp.choices[0].message.content
             await send_message(chat_id, f"📄 Резюме документа:\n{summary}")
         return {"ok": True}
 
     # Photo handling
-    if photos := msg.get("photo"):  # photo array
+    if photos := msg.get("photo"):
         file_id = photos[-1].get("file_id")
         dest = f"/tmp/{file_id}.jpg"
         await download_telegram_file(file_id, dest)
