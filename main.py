@@ -1,6 +1,6 @@
 import os
 from openai import OpenAI
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 from serpapi import GoogleSearch
@@ -19,7 +19,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "520740282"))
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Clients and state
 client = OpenAI(api_key=OPENAI_API_KEY)
 database = Database(DATABASE_URL) if DATABASE_URL else None
 chat_histories: dict[int, str] = {}
@@ -73,10 +72,13 @@ class TelegramMessage(BaseModel):
 
 async def send_message(chat_id: int, text: str):
     async with httpx.AsyncClient() as client_http:
-        await client_http.post(
-            f"{TELEGRAM_API}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-        )
+        try:
+            await client_http.post(
+                f"{TELEGRAM_API}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+            )
+        except Exception as e:
+            print(f"Failed to send message: {e}")
 
 async def download_telegram_file(file_id: str, dest_path: str) -> None:
     async with httpx.AsyncClient() as client_http:
@@ -111,7 +113,7 @@ async def telegram_webhook(req: Request):
 
     msg = update.message
     chat_id = msg.get("chat", {}).get("id")
-    text = msg.get("text", "").strip()
+    text = msg.get("text", "").strip() if msg.get("text") else ""
 
     # File or document upload
     if doc := msg.get("document"):
@@ -124,19 +126,26 @@ async def telegram_webhook(req: Request):
         if ext in ('pdf', 'txt'):
             text_content = ''
             if ext == 'pdf':
-                reader = PyPDF2.PdfReader(dest)
-                for page in reader.pages:
-                    text_content += (page.extract_text() or '') + '\n'
+                try:
+                    reader = PyPDF2.PdfReader(dest)
+                    for page in reader.pages:
+                        text_content += (page.extract_text() or '') + '\n'
+                except Exception as e:
+                    await send_message(chat_id, f"Ошибка при чтении PDF: {e}")
+                    return {"ok": True}
             else:
                 async with aiofiles.open(dest, 'r', encoding='utf-8') as f:
                     text_content = await f.read()
             snippet = text_content[:2000]
-            summary_resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": f"Пожалуйста, дай краткий анализ или резюме содержимого этого документа:\n{snippet}"}]
-            )
-            summary = summary_resp.choices[0].message.content
-            await send_message(chat_id, f"📄 Резюме документа:\n{summary}")
+            try:
+                summary_resp = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": f"Пожалуйста, дай краткий анализ или резюме содержимого этого документа:\n{snippet}"}]
+                )
+                summary = summary_resp.choices[0].message.content
+                await send_message(chat_id, f"📄 Резюме документа:\n{summary}")
+            except Exception as e:
+                await send_message(chat_id, f"Ошибка OpenAI: {e}")
         return {"ok": True}
 
     # Photo handling
@@ -201,34 +210,45 @@ async def telegram_webhook(req: Request):
 
     # Image generation
     if any(kw in text.lower() for kw in ["нарисуй", "сгенерируй", "картинка", "фото"]):
-        resp = client.images.generate(model="dall-e-3", prompt=text, n=1, size="1024x1024")
-        url = resp.data[0].url
-        async with httpx.AsyncClient() as client_http:
-            await client_http.post(
-                f"{TELEGRAM_API}/sendPhoto",
-                json={"chat_id": chat_id, "photo": url}
-            )
+        try:
+            resp = client.images.generate(model="dall-e-3", prompt=text, n=1, size="1024x1024")
+            url = resp.data[0].url
+            async with httpx.AsyncClient() as client_http:
+                await client_http.post(
+                    f"{TELEGRAM_API}/sendPhoto",
+                    json={"chat_id": chat_id, "photo": url}
+                )
+        except Exception as e:
+            await send_message(chat_id, f"Ошибка генерации изображения: {e}")
         return {"ok": True}
 
     # News via SerpAPI
     if any(w in text.lower() for w in ["что нового", "новости"]):
         params = {"q": "новости", "hl": "ru", "gl": "ru", "api_key": SERPAPI_KEY}
-        results = GoogleSearch(params).get_dict().get("news_results", [])
-        news = "Не удалось получить новости." if not results else "\n".join(f"• {i['title']}" for i in results[:5])
+        try:
+            results = GoogleSearch(params).get_dict().get("news_results", [])
+            news = "Не удалось получить новости." if not results else "\n".join(f"• {i['title']}" for i in results[:5])
+        except Exception as e:
+            news = f"Ошибка получения новостей: {e}"
         await send_message(chat_id, news)
         return {"ok": True}
 
     # Assistants API conversation
-    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=text)
-    run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=ASSISTANT_ID)
-    while True:
-        status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-        if status.status == "completed":
-            break
-    msgs = client.beta.threads.messages.list(thread_id=thread.id)
-    reply = msgs.data[-1].content[0].text.value
-    await send_message(chat_id, reply)
+    try:
+        client.beta.threads.messages.create(thread_id=thread.id, role="user", content=text)
+        run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=ASSISTANT_ID)
+        while True:
+            status = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+            if status.status == "completed":
+                break
+        msgs = client.beta.threads.messages.list(thread_id=thread.id)
+        reply = msgs.data[-1].content[0].text.value
+        await send_message(chat_id, reply)
+    except Exception as e:
+        await send_message(chat_id, f"Ошибка общения с OpenAI: {e}")
+
     return {"ok": True}
+
 
 
 
