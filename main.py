@@ -21,49 +21,51 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # Clients and state
 client = OpenAI(api_key=OPENAI_API_KEY)
-database = Database(DATABASE_URL)
+database = Database(DATABASE_URL) if DATABASE_URL else None
 chat_histories: dict[int, str] = {}
 started_users: set[int] = set()
 
 @app.on_event("startup")
 async def startup():
-    await database.connect()
-    # create tables if not exist
-    await database.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            chat_id TEXT UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
-    await database.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            id SERIAL PRIMARY KEY,
-            chat_id TEXT UNIQUE,
-            is_active BOOLEAN DEFAULT FALSE,
-            expires_at TIMESTAMP,
-            transaction_id TEXT,
-            payment_method TEXT
-        );
-        """
-    )
-    await database.execute(
-        """
-        CREATE TABLE IF NOT EXISTS usage_log (
-            id SERIAL PRIMARY KEY,
-            chat_id TEXT,
-            used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
+    if database:
+        await database.connect()
+        # create tables if not exist
+        await database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        await database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT UNIQUE,
+                is_active BOOLEAN DEFAULT FALSE,
+                expires_at TIMESTAMP,
+                transaction_id TEXT,
+                payment_method TEXT
+            );
+            """
+        )
+        await database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usage_log (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT,
+                used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
     await update_bot_commands()
 
 @app.on_event("shutdown")
 async def shutdown():
-    await database.disconnect()
+    if database:
+        await database.disconnect()
 
 class TelegramMessage(BaseModel):
     update_id: int
@@ -111,7 +113,7 @@ async def telegram_webhook(req: Request):
     chat_id = msg.get("chat", {}).get("id")
     text = msg.get("text", "").strip()
 
-    # Document or file upload
+    # File or document upload
     if doc := msg.get("document"):
         file_id = doc.get("file_id")
         file_name = doc.get("file_name", "file")
@@ -131,11 +133,7 @@ async def telegram_webhook(req: Request):
             snippet = text_content[:2000]
             summary_resp = client.chat.completions.create(
                 model="gpt-4o",
-                messages=[{
-                    "role": "user",
-                    "content": f"""Пожалуйста, дай краткий анализ или резюме содержимого этого документа:
-{snippet}"""
-                }]
+                messages=[{"role": "user", "content": f"Пожалуйста, дай краткий анализ или резюме содержимого этого документа:\n{snippet}"}]
             )
             summary = summary_resp.choices[0].message.content
             await send_message(chat_id, f"📄 Резюме документа:\n{summary}")
@@ -149,15 +147,16 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, "✅ Фото получено и сохранено.")
         return {"ok": True}
 
-    # Log user and usage
-    await database.execute(
-        "INSERT INTO users (chat_id) VALUES (:chat_id) ON CONFLICT (chat_id) DO NOTHING;",
-        {"chat_id": str(chat_id)}
-    )
-    await database.execute(
-        "INSERT INTO usage_log (chat_id) VALUES (:chat_id);",
-        {"chat_id": str(chat_id)}
-    )
+    # Log user and usage if DB enabled
+    if database:
+        await database.execute(
+            "INSERT INTO users (chat_id) VALUES (:chat_id) ON CONFLICT (chat_id) DO NOTHING;",
+            {"chat_id": str(chat_id)}
+        )
+        await database.execute(
+            "INSERT INTO usage_log (chat_id) VALUES (:chat_id);",
+            {"chat_id": str(chat_id)}
+        )
 
     # Initialize or retrieve conversation thread
     if chat_id not in chat_histories:
@@ -166,7 +165,7 @@ async def telegram_webhook(req: Request):
     else:
         thread = client.beta.threads.retrieve(chat_histories[chat_id])
 
-    # Handle commands
+    # Commands
     if text == "/start":
         if chat_id not in started_users:
             await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
@@ -185,9 +184,12 @@ async def telegram_webhook(req: Request):
         if chat_id != OWNER_CHAT_ID:
             await send_message(chat_id, "⛔ У тебя нет доступа к этой команде.")
             return {"ok": True}
-        total_users = await database.fetch_val("SELECT COUNT(*) FROM users;")
-        total_requests = await database.fetch_val("SELECT COUNT(*) FROM usage_log;")
-        active_subs = await database.fetch_val("SELECT COUNT(*) FROM subscriptions WHERE is_active = true;")
+        if database:
+            total_users = await database.fetch_val("SELECT COUNT(*) FROM users;")
+            total_requests = await database.fetch_val("SELECT COUNT(*) FROM usage_log;")
+            active_subs = await database.fetch_val("SELECT COUNT(*) FROM subscriptions WHERE is_active = true;")
+        else:
+            total_users = total_requests = active_subs = 0
         stats = (
             "📊 *Статистика:*\n"
             f"👥 Пользователей: {total_users}\n"
@@ -216,7 +218,7 @@ async def telegram_webhook(req: Request):
         await send_message(chat_id, news)
         return {"ok": True}
 
-    # Regular Assistants API conversation
+    # Assistants API conversation
     client.beta.threads.messages.create(thread_id=thread.id, role="user", content=text)
     run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=ASSISTANT_ID)
     while True:
@@ -227,6 +229,7 @@ async def telegram_webhook(req: Request):
     reply = msgs.data[-1].content[0].text.value
     await send_message(chat_id, reply)
     return {"ok": True}
+
 
 
 
