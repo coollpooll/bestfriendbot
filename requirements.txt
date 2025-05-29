@@ -5,4 +5,8 @@ python-telegram-bot==13.15
 openai
 httpx
 serpapi==0.1.5
+databases[postgresql]
+aiofiles
+PyPDF2
+
 
