@@ -22,6 +22,8 @@ CLOUDPAYMENTS_SECRET = os.getenv("CLOUDPAYMENTS_SECRET", "your_cloudpayments_sec
 DATABASE_URL = "postgresql://bestfriend_db_user:Cm0DfEpdc2wvTPqrFd29ArMyJY4XYh5C@dpg-d0rmt7h5pdvs73a6h9m0-a/bestfriend_db"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+OWNER_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 database = Database(DATABASE_URL)
 usage_counter = {}
@@ -112,6 +114,24 @@ async def telegram_webhook(req: Request):
 
         if text == "/start":
             await send_message(chat_id, "👋 Привет! Я твой BESTFRIEND. Готов помочь! Просто напиши, что тебе нужно.")
+            return {"ok": True}
+
+        if text == "/admin":
+            if str(chat_id) != OWNER_CHAT_ID:
+                await send_message(chat_id, "⛔ У тебя нет доступа к этой команде.")
+                return {"ok": True}
+
+            total_users = await database.fetch_val("SELECT COUNT(*) FROM users;")
+            total_requests = await database.fetch_val("SELECT COUNT(*) FROM usage_log;")
+            active_subs = await database.fetch_val("SELECT COUNT(*) FROM subscriptions WHERE is_active = true;")
+
+            message = (
+                f"📊 *Статистика:*\n\n"
+                f"👥 Пользователей: {total_users}\n"
+                f"📨 Запросов: {total_requests}\n"
+                f"💳 Активных подписок: {active_subs}"
+            )
+            await send_message(chat_id, message)
             return {"ok": True}
 
         if text:
