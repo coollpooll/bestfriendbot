@@ -10,5 +10,11 @@ uvicorn>=0.29.0
 fastapi>=0.111.0
 aiofiles>=24.1.0
 
-
-
+# Для поддержки максимального количества форматов:
+rarfile
+python-docx
+python-pptx
+textract
+xlrd
+openpyxl
+pandas
