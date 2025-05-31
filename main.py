@@ -184,6 +184,41 @@ async def universal_image_handler(message: types.Message):
     # Не картинка — просто текстовый запрос в GPT-4o
     await handle_text(message)
 
+# --- Определение является ли ответ кодом ---
+def should_send_as_file(text):
+    if re.search(r"```.*?```", text, re.DOTALL):
+        return True
+    if re.match(r"^\s*(def |class |import |from |#|\/\/|<\w+)", text.strip()):
+        return True
+    lines = text.strip().split("\n")
+    if len(lines) > 8 and any(sym in lines[0] for sym in ("def", "class", "import", "from", "#", "//", "<")):
+        return True
+    # На всякий случай — если внутри есть фрагмент похожий на код
+    if re.search(r"(def |class |import |from |#|\/\/|<\w+)", text):
+        return True
+    return False
+
+async def generate_filename(prompt, answer):
+    # Даем GPT задачу придумать короткое название файла
+    system_prompt = (
+        "Ты помощник для Telegram. На входе описание задачи и текст ответа с кодом. "
+        "Верни ТОЛЬКО короткое английское название файла (без лишнего текста), не более 3 слов, через нижнее подчёркивание, всегда с расширением .txt, "
+        "пример: snake_game.txt, telegram_bot.txt, sql_export_script.txt"
+    )
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Запрос: {prompt}\nОтвет:\n{answer}\n"},
+        ],
+        max_tokens=20,
+        temperature=0.1
+    )
+    name = response.choices[0].message.content.strip()
+    if not name.endswith(".txt"):
+        name = "answer.txt"
+    return name
+
 # --- Стандартный текстовый обработчик GPT-4o + память ---
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
@@ -198,7 +233,17 @@ async def handle_text(message: types.Message):
         )
         answer = gpt_response.choices[0].message.content
         await db.add_message(user_id, "assistant", answer)
-        await message.answer(answer)
+
+        # ===== Если это код — отправляем как файл =====
+        if should_send_as_file(answer):
+            file_name = await generate_filename(user_text, answer)
+            with open(file_name, "w", encoding="utf-8") as f:
+                f.write(answer)
+            with open(file_name, "rb") as f:
+                await message.answer_document(types.BufferedInputFile(f.read(), file_name), caption="Готово! Вот твой файл 👇")
+            os.remove(file_name)
+        else:
+            await message.answer(answer)
     except Exception:
         await message.answer("Ошибка при получении ответа от ИИ 🤖")
 
@@ -387,6 +432,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
