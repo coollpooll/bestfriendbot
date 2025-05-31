@@ -103,6 +103,20 @@ class Database:
                 user_id, plan, payment_id
             )
 
+    # --- Новый метод: Проверка подписки пользователя ---
+    async def get_user_subscription(self, user_id):
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT plan, expires_at FROM subscriptions
+                WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
+                ORDER BY expires_at DESC
+                LIMIT 1
+                """,
+                user_id
+            )
+            return row
+
     # --- Статистика для админа (обновлено!) ---
     async def get_stats(self):
         async with self.pool.acquire() as connection:
@@ -149,10 +163,25 @@ async def help_command(message: types.Message):
 @dp.message(F.text.lower() == "подписка")
 async def sub_command(message: types.Message):
     sub_url = "https://your-payment-link.com"
+    user_id = message.from_user.id
+    sub = await db.get_user_subscription(user_id)
+    if sub is None:
+        text = (
+            "😔 <b>Подписка не активна</b>\n\n"
+            "Оформи подписку, чтобы получить расширенный доступ:\n"
+            f"<a href=\"{sub_url}\">Оплатить подписку</a>"
+        )
+    else:
+        expires = sub["expires_at"].strftime("%d.%m.%Y %H:%M")
+        text = (
+            f"✅ <b>Ваша подписка активна до: {expires}</b>\n\n"
+            "Продлить подписку:\n"
+            f"<a href=\"{sub_url}\">Оплатить подписку</a>"
+        )
     await message.answer(
-        "🔗 <b>Оплатить подписку</b>\n\nПерейди по ссылке:\n" + sub_url,
+        text,
         disable_web_page_preview=True,
-        reply_markup=get_main_keyboard(message.from_user.id)
+        reply_markup=get_main_keyboard(user_id)
     )
 
 @dp.message(F.text.lower() == "админ")
@@ -458,6 +487,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
