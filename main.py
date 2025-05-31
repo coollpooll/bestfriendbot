@@ -84,14 +84,33 @@ class Database:
             )
             return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
-    # --- Статистика для админа ---
+    # --- Новый метод: Добавление подписки ---
+    async def add_subscription(self, user_id, plan, payment_id):
+        async with self.pool.acquire() as connection:
+            if plan == 'monthly':
+                expires_at = "NOW() + INTERVAL '30 days'"
+            elif plan == 'yearly':
+                expires_at = "NOW() + INTERVAL '365 days'"
+            else:
+                raise ValueError("Unknown plan type")
+            await connection.execute(
+                f"""
+                INSERT INTO subscriptions 
+                    (user_id, plan, started_at, expires_at, payment_id, status) 
+                VALUES 
+                    ($1, $2, NOW(), {expires_at}, $3, 'active')
+                """,
+                user_id, plan, payment_id
+            )
+
+    # --- Статистика для админа (обновлено!) ---
     async def get_stats(self):
         async with self.pool.acquire() as connection:
             users = await connection.fetchval("SELECT COUNT(*) FROM users")
             monthly = await connection.fetchval(
-                "SELECT COUNT(*) FROM subscriptions WHERE plan = 'monthly'")
+                "SELECT COUNT(*) FROM subscriptions WHERE plan = 'monthly' AND status = 'active'")
             yearly = await connection.fetchval(
-                "SELECT COUNT(*) FROM subscriptions WHERE plan = 'yearly'")
+                "SELECT COUNT(*) FROM subscriptions WHERE plan = 'yearly' AND status = 'active'")
             return users, monthly, yearly
 
 db = Database(DATABASE_URL)
@@ -439,6 +458,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
