@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
@@ -117,7 +118,7 @@ async def help_command(message: types.Message):
         "2. Вопросы можно задавать голосом, текстом, картинкой или документом (PDF, Word, Excel, PPTX, ZIP, RAR, TXT, CSV и др.).\n"
         "3. Все сообщения обрабатывает нейросеть GPT-4o (есть память и поддержка картинок/файлов).\n\n"
         "<b>Модель:</b> GPT-4o — умная, быстрая, понимает русский, учитывает весь твой диалог.\n"
-        "<b>Генерируй картинки текстом! Просто напиши 'сгенерируй картинку: [описание]'</b>\n"
+        "<b>Генерируй картинки текстом! Просто напиши 'нарисуй ленина в бане' или 'создай картинку тигра в очках'.</b>\n"
         "<b>Для расширенного доступа — оформи подписку через ПОДПИСКА.</b>\n"
     )
     await message.answer(help_text)
@@ -149,24 +150,57 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# -------- Генерация изображений только DALL-E --------
-@dp.message(F.text.lower().startswith("сгенерируй картинку"))
-async def generate_image(message: types.Message):
-    prompt = message.text.partition(":")[2].strip()
-    if not prompt:
-        await message.answer("Напиши описание картинки после 'сгенерируй картинку:'")
+# --- Универсальный обработчик генерации изображений по ключевым словам ---
+IMAGE_KEYWORDS = [
+    r"^(нарисуй|создай|сделай|сгенерируй)\s*(картинку|изображение)?",
+    r"^(generate|draw|create|make)\s*(image|picture)?",
+]
+
+@dp.message(F.text)
+async def universal_image_handler(message: types.Message):
+    text = message.text.strip().lower()
+    # Не триггерить на "помощь", "подписка", служебные
+    if text in ["помощь", "подписка", "/help", "/sub"]:
         return
+    for pattern in IMAGE_KEYWORDS:
+        m = re.match(pattern, text)
+        if m:
+            desc = re.sub(pattern, '', text, count=1).strip(":,. \n")
+            if not desc:
+                await message.answer("Опиши, что нужно нарисовать 👩‍🎨")
+                return
+            try:
+                response = openai_client.images.generate(
+                    model="dall-e-3",
+                    prompt=desc,
+                    n=1,
+                    size="1024x1024"
+                )
+                image_url = response.data[0].url
+                await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — просто напиши новый запрос.")
+            except Exception as e:
+                await message.answer("Ошибка при генерации картинки 😔")
+            return  # Не обрабатывать далее как текст!
+    # Не картинка — просто текстовый запрос в GPT-4o
+    await handle_text(message)
+
+# --- Стандартный текстовый обработчик GPT-4o + память ---
+async def handle_text(message: types.Message):
+    user_id = message.from_user.id
+    user_text = message.text
+
+    await db.add_message(user_id, "user", user_text)
+    history = await db.get_history(user_id, limit=16)
     try:
-        response = openai_client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            n=1,
-            size="1024x1024"
+        gpt_response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=history,
         )
-        image_url = response.data[0].url
-        await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — просто напиши новый запрос.")
-    except Exception as e:
-        await message.answer("Ошибка при генерации картинки 😔")
+        answer = gpt_response.choices[0].message.content
+        await db.add_message(user_id, "assistant", answer)
+        await message.answer(answer)
+    except Exception:
+        await message.answer("Ошибка при получении ответа от ИИ 🤖")
 
 # ------- Голосовые сообщения (Whisper + GPT-4o) --------
 @dp.message(F.voice)
@@ -350,31 +384,10 @@ async def handle_document(message: types.Message):
     except Exception:
         await message.answer("Ошибка при обработке файла 🤖")
 
-# ------- Текстовые сообщения (GPT-4o + память) --------
-@dp.message(F.text)
-async def handle_text(message: types.Message):
-    user_id = message.from_user.id
-    user_text = message.text
-
-    if user_text.lower() in ["помощь", "подписка", "/help", "/sub"] or user_text.lower().startswith("сгенерируй картинку"):
-        return
-
-    await db.add_message(user_id, "user", user_text)
-    history = await db.get_history(user_id, limit=16)
-    try:
-        gpt_response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=history,
-        )
-        answer = gpt_response.choices[0].message.content
-        await db.add_message(user_id, "assistant", answer)
-        await message.answer(answer)
-    except Exception:
-        await message.answer("Ошибка при получении ответа от ИИ 🤖")
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
