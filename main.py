@@ -11,7 +11,7 @@ import asyncpg
 from fastapi import FastAPI, Request
 from openai import OpenAI
 from pydub import AudioSegment
-from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from PIL import Image
 import io
 
@@ -86,14 +86,7 @@ class Database:
 
 db = Database(DATABASE_URL)
 
-# --- Кнопки
-async def set_bot_commands(bot: Bot):
-    commands = [
-        BotCommand(command="help", description="Правила и описание бота"),
-        BotCommand(command="sub", description="Оплата подписки"),
-    ]
-    await bot.set_my_commands(commands)
-
+# --- Только стильные кнопки
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")]
@@ -110,7 +103,6 @@ async def cmd_start(message: types.Message):
     )
 
 @dp.message(F.text.lower() == "помощь")
-@dp.message(F.text == "/help")
 async def help_command(message: types.Message):
     help_text = (
         "<b>Правила пользования 🤖</b>\n"
@@ -124,7 +116,6 @@ async def help_command(message: types.Message):
     await message.answer(help_text)
 
 @dp.message(F.text.lower() == "подписка")
-@dp.message(F.text == "/sub")
 async def sub_command(message: types.Message):
     sub_url = "https://your-payment-link.com"
     await message.answer(
@@ -136,7 +127,6 @@ async def sub_command(message: types.Message):
 async def on_startup():
     await db.connect()
     logging.info("Database connected")
-    await set_bot_commands(bot)
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -159,8 +149,8 @@ IMAGE_KEYWORDS = [
 @dp.message(F.text)
 async def universal_image_handler(message: types.Message):
     text = message.text.strip().lower()
-    # Не триггерить на "помощь", "подписка", служебные
-    if text in ["помощь", "подписка", "/help", "/sub"]:
+    # Не триггерить на "помощь", "подписка"
+    if text in ["помощь", "подписка"]:
         return
     for pattern in IMAGE_KEYWORDS:
         m = re.match(pattern, text)
@@ -184,7 +174,6 @@ async def universal_image_handler(message: types.Message):
     # Не картинка — просто текстовый запрос в GPT-4o
     await handle_text(message)
 
-# --- Определение является ли ответ кодом ---
 def should_send_as_file(text):
     if re.search(r"```.*?```", text, re.DOTALL):
         return True
@@ -193,13 +182,11 @@ def should_send_as_file(text):
     lines = text.strip().split("\n")
     if len(lines) > 8 and any(sym in lines[0] for sym in ("def", "class", "import", "from", "#", "//", "<")):
         return True
-    # На всякий случай — если внутри есть фрагмент похожий на код
     if re.search(r"(def |class |import |from |#|\/\/|<\w+)", text):
         return True
     return False
 
 async def generate_filename(prompt, answer):
-    # Даем GPT задачу придумать короткое название файла
     system_prompt = (
         "Ты помощник для Telegram. На входе описание задачи и текст ответа с кодом. "
         "Верни ТОЛЬКО короткое английское название файла (без лишнего текста), не более 3 слов, через нижнее подчёркивание, всегда с расширением .txt, "
@@ -219,7 +206,6 @@ async def generate_filename(prompt, answer):
         name = "answer.txt"
     return name
 
-# --- Стандартный текстовый обработчик GPT-4o + память ---
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
@@ -301,7 +287,6 @@ async def handle_photo(message: types.Message):
     file = await bot.get_file(photo.file_id)
     img_bytes = await bot.download_file(file.file_path)
     image_data = img_bytes.read()
-    # Отправить картинку и подпись (если есть) в GPT-4o Vision
     gpt_messages = [{"role": "user", "content": [{"type": "text", "text": message.caption or "Что на фото?"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_data.hex()}}]}]
     try:
         gpt_response = openai_client.chat.completions.create(
@@ -403,11 +388,9 @@ async def handle_document(message: types.Message):
             format_note = "RAR-архив:"
     # Картинки
     elif filename.endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")):
-        # По сути как обычное фото
         await handle_photo(message)
         return
     else:
-        # Попробовать просто извлечь текст
         try:
             content = textract.process(io.BytesIO(file_bytes.read())).decode('utf-8')
             format_note = "Другой формат (textract):"
@@ -432,6 +415,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
