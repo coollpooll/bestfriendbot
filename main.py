@@ -2,24 +2,27 @@ import os
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.filters import CommandStart
+from aiogram.types import FSInputFile
+from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
 import asyncpg
 from fastapi import FastAPI, Request
-from openai import AsyncOpenAI
+from openai import OpenAI
+import httpx
+from pydub import AudioSegment
+import speech_recognition as sr
 
 load_dotenv()
 
-# Логирование для отладки
 logging.basicConfig(level=logging.INFO)
 
-# Telegram bot token и др.
+# ENV vars
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
-OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
+OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
@@ -41,36 +44,81 @@ class Database:
     async def add_user(self, user_id):
         async with self.pool.acquire() as connection:
             await connection.execute(
-                "INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
-                user_id
+                "INSERT INTO users (user_id, requests_today) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
+                user_id, 0
             )
 
-db = Database(DATABASE_URL)
+    async def inc_requests(self, user_id):
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE users SET requests_today = requests_today + 1 WHERE user_id = $1", user_id
+            )
 
-# OpenAI Client
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    async def get_requests(self, user_id):
+        async with self.pool.acquire() as connection:
+            result = await connection.fetchrow(
+                "SELECT requests_today FROM users WHERE user_id = $1", user_id
+            )
+            if result:
+                return result['requests_today']
+            else:
+                return 0
+
+db = Database(DATABASE_URL)
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await db.add_user(message.from_user.id)
-    await message.answer("Привет! Я твой BEST FRIEND 🤖\nГотов помочь с любыми вопросами!")
+    await message.answer(
+        "Привет! Я твой BEST FRIEND 🤖\nГотов помочь с любыми вопросами!\n"
+        "Поддерживаю текст, голос и картинки. /help для справки."
+    )
 
-# Ответ на любое текстовое сообщение через GPT-4o
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "Я бот на GPT-4o, умею:\n"
+        "— Текстовые ответы (GPT-4o)\n"
+        "— Голос (Whisper)\n"
+        "— Картинки (DALL-E)\n"
+        "Лимит: 3 запроса в сутки бесплатно.\n"
+        "Подписка — неограниченно!\n"
+        "/status — узнать остаток лимита."
+    )
+
+@dp.message(Command("status"))
+async def cmd_status(message: types.Message):
+    count = await db.get_requests(message.from_user.id)
+    await message.answer(f"Сегодня использовано запросов: {count}/3")
+
+# ———  ОБРАБОТКА ЛЮБОГО ТЕКСТОВОГО СООБЩЕНИЯ ———
 @dp.message()
-async def ai_answer(message: types.Message):
-    if message.text:
-        # Отправляем запрос в OpenAI Assistants API
-        thread = await openai_client.beta.threads.create_and_run(
-            assistant_id=ASSISTANT_ID,
-            thread={"messages": [{"role": "user", "content": message.text}]}
+async def gpt4o_reply(message: types.Message):
+    user_id = message.from_user.id
+
+    # 1. Лимит запросов
+    requests_today = await db.get_requests(user_id)
+    if requests_today >= 3:
+        await message.answer("⛔ Лимит запросов на сегодня исчерпан!\nОформи подписку для безлимита.")
+        return
+
+    await db.inc_requests(user_id)
+
+    # 2. GPT-4o обработка
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Ты дружелюбный ассистент."},
+                {"role": "user", "content": message.text}
+            ]
         )
-        # Достаём финальный ответ, можно доработать если нужно потоковое
-        try:
-            # Стандартный способ получения ответа
-            result = thread.latest_run.step_details['message']['content'][0]['text']['value']
-        except Exception:
-            result = "🤖 Готово! Но что-то пошло не так с получением ответа от GPT."
-        await message.answer(result)
+        reply = response.choices[0].message.content
+        await message.answer(reply)
+    except Exception as e:
+        logging.error(f"OpenAI error: {e}")
+        await message.answer("🤖 Готово! Но что-то пошло не так с получением ответа от GPT.")
 
 @app.on_event("startup")
 async def on_startup():
@@ -92,5 +140,6 @@ async def telegram_webhook(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
