@@ -70,7 +70,7 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# ------- Голосовые сообщения через Whisper + pydub --------
+# ------- Голосовые сообщения через Whisper + pydub + GPT --------
 @dp.message(F.voice)
 async def handle_voice(message: types.Message):
     file_id = message.voice.file_id
@@ -85,7 +85,7 @@ async def handle_voice(message: types.Message):
     except Exception as e:
         await message.answer("Не получилось обработать голосовое 😢")
         return
-    # Отправляем в OpenAI
+    # Отправляем в OpenAI на распознавание текста
     try:
         with open(wav_path, "rb") as audio_file:
             transcript = openai_client.audio.transcriptions.create(
@@ -94,18 +94,27 @@ async def handle_voice(message: types.Message):
                 response_format="text",
                 language="ru"
             )
-        prompt = transcript.text if hasattr(transcript, "text") else str(transcript)
-        await message.answer(f"Твой текст: {prompt}")
+        user_text = transcript.text if hasattr(transcript, "text") else str(transcript)
     except Exception as e:
         await message.answer("Ошибка при распознавании голосового 😔")
         return
-    # Удаляем временные файлы
+    finally:
+        # Удаляем временные файлы всегда
+        try:
+            os.remove(ogg_path)
+            os.remove(wav_path)
+        except Exception:
+            pass
+    # Отправляем распознанный текст в GPT и возвращаем ОТВЕТ
     try:
-        os.remove(ogg_path)
-        os.remove(wav_path)
-    except Exception:
-        pass
-    # Здесь можно добавить отправку текста в GPT, если надо!
+        gpt_response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_text}],
+        )
+        answer = gpt_response.choices[0].message.content
+        await message.answer(answer)
+    except Exception as e:
+        await message.answer("Ошибка при получении ответа от ИИ 🤖")
 
 if __name__ == "__main__":
     import uvicorn
