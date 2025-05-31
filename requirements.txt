@@ -14,7 +14,6 @@ aiofiles>=24.1.0
 rarfile
 python-docx
 python-pptx
-textract
 xlrd
 openpyxl
 pandas
