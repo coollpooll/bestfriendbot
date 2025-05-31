@@ -302,11 +302,8 @@ async def generate_filename(prompt, answer):
 # ----------- ВСТАВКА: обработка времени --------------
 def is_time_question(text):
     text = text.lower()
-    time_keywords = [
-        "который час", "сколько времени", "текущее время", "сейчас время",
-        "what time is it", "current time", "time now"
-    ]
-    return any(x in text for x in time_keywords)
+    # Любая форма: "время", "час", "time" в любой части запроса
+    return bool(re.search(r"\b(время|час|time)\b", text))
 
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
@@ -583,6 +580,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
