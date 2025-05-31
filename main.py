@@ -458,9 +458,23 @@ async def handle_document(message: types.Message):
             file_list = rar.namelist()
             content = "В архиве RAR следующие файлы:\n" + "\n".join(file_list[:20])
             format_note = "RAR-архив:"
-    # Картинки
+    # Картинки (фикс безопасного распознавания картинки из документа)
     elif filename.endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")):
-        await handle_photo(message)
+        file_bytes.seek(0)
+        image_data = file_bytes.read()
+        try:
+            gpt_messages = [{"role": "user", "content": [
+                {"type": "text", "text": message.caption or "Что на фото?"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_data.hex()}}
+            ]}]
+            gpt_response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=gpt_messages
+            )
+            answer = gpt_response.choices[0].message.content
+            await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
+        except Exception:
+            await message.answer("Ошибка при распознавании изображения 😔", reply_markup=get_main_keyboard(message.from_user.id))
         return
     else:
         try:
@@ -487,6 +501,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
