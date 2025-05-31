@@ -43,7 +43,7 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Database logic (без изменений)
+# --- Database logic
 class Database:
     def __init__(self, dsn):
         self.dsn = dsn
@@ -149,7 +149,7 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# -------- Генерация изображений --------
+# -------- Генерация изображений только DALL-E --------
 @dp.message(F.text.lower().startswith("сгенерируй картинку"))
 async def generate_image(message: types.Message):
     prompt = message.text.partition(":")[2].strip()
@@ -375,6 +375,7 @@ async def handle_text(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
