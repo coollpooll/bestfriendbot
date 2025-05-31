@@ -68,7 +68,7 @@ class Database:
 
 db = Database(DATABASE_URL)
 
-# --- Меню команд Telegram (будет работать и через меню, и через кнопки)
+# --- Модные кнопки ПОМОЩЬ и ПОДПИСКА
 from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
 
 async def set_bot_commands(bot: Bot):
@@ -80,7 +80,7 @@ async def set_bot_commands(bot: Bot):
 
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="/help"), KeyboardButton(text="/sub")]
+        [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")]
     ],
     resize_keyboard=True
 )
@@ -93,6 +93,7 @@ async def cmd_start(message: types.Message):
         reply_markup=main_keyboard
     )
 
+@dp.message(F.text.lower() == "помощь")
 @dp.message(F.text == "/help")
 async def help_command(message: types.Message):
     help_text = (
@@ -101,10 +102,11 @@ async def help_command(message: types.Message):
         "2. Вопросы можно задавать голосом или текстом.\n"
         "3. Все сообщения обрабатывает нейросеть GPT-4o с памятью (контекст сохраняется).\n\n"
         "<b>Модель:</b> GPT-4o — умная, быстрая, понимает русский, учитывает весь твой диалог.\n"
-        "<b>Для расширенного доступа — оформи подписку через /sub.</b>\n"
+        "<b>Для расширенного доступа — оформи подписку через ПОДПИСКА.</b>\n"
     )
     await message.answer(help_text)
 
+@dp.message(F.text.lower() == "подписка")
 @dp.message(F.text == "/sub")
 async def sub_command(message: types.Message):
     sub_url = "https://your-payment-link.com"  # ← потом сюда реальную ссылку
@@ -183,9 +185,8 @@ async def handle_text(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
 
-    # не дублируем логику help/sub если уже обработали выше
-    if user_text in ["/help", "/sub"]:
-        return
+    if user_text.lower() in ["помощь", "подписка", "/help", "/sub"]:
+        return  # уже обработано выше
 
     await db.add_message(user_id, "user", user_text)
     history = await db.get_history(user_id, limit=16)
@@ -203,6 +204,7 @@ async def handle_text(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
