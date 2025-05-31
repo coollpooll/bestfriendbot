@@ -10,6 +10,7 @@ uvicorn>=0.29.0
 fastapi>=0.111.0
 aiofiles>=24.1.0
 PyPDF2>=3.0.0
+SpeechRecognition~=3.8.1
 
 # Для поддержки максимального количества форматов:
 rarfile
