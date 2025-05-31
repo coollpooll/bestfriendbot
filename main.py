@@ -2,7 +2,8 @@ import os
 import logging
 import re
 import base64
-import httpx  # <--- ДОБАВИЛ! для SerpAPI
+import httpx  # <--- для SerpAPI
+import datetime  # <--- для времени
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
@@ -108,7 +109,6 @@ class Database:
             )
             return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
-    # --- Новый метод: Добавление подписки ---
     async def add_subscription(self, user_id, plan, payment_id):
         async with self.pool.acquire() as connection:
             if plan == 'monthly':
@@ -127,7 +127,6 @@ class Database:
                 user_id, plan, payment_id
             )
 
-    # --- Новый метод: Проверка подписки пользователя ---
     async def get_user_subscription(self, user_id):
         async with self.pool.acquire() as connection:
             row = await connection.fetchrow(
@@ -141,7 +140,6 @@ class Database:
             )
             return row
 
-    # --- Статистика для админа (обновлено!) ---
     async def get_stats(self):
         async with self.pool.acquire() as connection:
             users = await connection.fetchval("SELECT COUNT(*) FROM users")
@@ -153,7 +151,6 @@ class Database:
 
 db = Database(DATABASE_URL)
 
-# --- Клавиатура с видимостью кнопки "АДМИН" только для OWNER_CHAT_ID
 def get_main_keyboard(user_id):
     buttons = [
         [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")]
@@ -225,7 +222,7 @@ async def admin_stats(message: types.Message):
 async def on_startup():
     await db.connect()
     logging.info("Database connected")
-    await bot.delete_my_commands()  # Нет меню команд
+    await bot.delete_my_commands()
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -239,7 +236,6 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# --- Универсальный обработчик генерации изображений по ключевым словам ---
 IMAGE_KEYWORDS = [
     r"^(нарисуй|создай|сделай|сгенерируй)\s*(картинку|изображение)?",
     r"^(generate|draw|create|make)\s*(image|picture)?",
@@ -303,9 +299,24 @@ async def generate_filename(prompt, answer):
         name = "answer.txt"
     return name
 
+# ----------- ВСТАВКА: обработка времени --------------
+def is_time_question(text):
+    text = text.lower()
+    time_keywords = [
+        "который час", "сколько времени", "текущее время", "сейчас время",
+        "what time is it", "current time", "time now"
+    ]
+    return any(x in text for x in time_keywords)
+
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
+
+    # Если вопрос о времени — отвечаем локальным временем
+    if is_time_question(user_text):
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        await message.answer(f"Сейчас {now}", reply_markup=get_main_keyboard(user_id))
+        return
 
     await db.add_message(user_id, "user", user_text)
     history = await db.get_history(user_id, limit=16)
@@ -316,7 +327,6 @@ async def handle_text(message: types.Message):
         )
         answer = gpt_response.choices[0].message.content
 
-        # <-- Вот здесь ловим "бот не знает", автоматом подгружаем Яндекс -->
         if any(x in answer.lower() for x in [
             "не имею доступа к текущему времени",
             "не имею доступа к интернету",
@@ -356,6 +366,7 @@ async def handle_text(message: types.Message):
             await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
     except Exception:
         await message.answer("Ошибка при получении ответа от ИИ 🤖", reply_markup=get_main_keyboard(message.from_user.id))
+# ----------- КОНЕЦ ВСТАВКИ -------------
 
 # ------- Голосовые сообщения (Whisper + GPT-4o) --------
 @dp.message(F.voice)
@@ -572,6 +583,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
