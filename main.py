@@ -64,20 +64,60 @@ class Database:
                 """,
                 user_id, limit
             )
-            # Вернуть список в правильном порядке (сначала старые)
             return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
 db = Database(DATABASE_URL)
 
+# --- Меню команд Telegram (будет работать и через меню, и через кнопки)
+from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
+
+async def set_bot_commands(bot: Bot):
+    commands = [
+        BotCommand(command="help", description="Правила и описание бота"),
+        BotCommand(command="sub", description="Оплата подписки"),
+    ]
+    await bot.set_my_commands(commands)
+
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="/help"), KeyboardButton(text="/sub")]
+    ],
+    resize_keyboard=True
+)
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await db.add_user(message.from_user.id)
-    await message.answer("Привет! Я твой BEST FRIEND 🤖\nГотов помочь с любыми вопросами!")
+    await message.answer(
+        "Привет! Я твой BEST FRIEND 🤖\nГотов помочь с любыми вопросами!",
+        reply_markup=main_keyboard
+    )
+
+@dp.message(F.text == "/help")
+async def help_command(message: types.Message):
+    help_text = (
+        "<b>Правила пользования 🤖</b>\n"
+        "1. Не спамь и не злоупотребляй ботом.\n"
+        "2. Вопросы можно задавать голосом или текстом.\n"
+        "3. Все сообщения обрабатывает нейросеть GPT-4o с памятью (контекст сохраняется).\n\n"
+        "<b>Модель:</b> GPT-4o — умная, быстрая, понимает русский, учитывает весь твой диалог.\n"
+        "<b>Для расширенного доступа — оформи подписку через /sub.</b>\n"
+    )
+    await message.answer(help_text)
+
+@dp.message(F.text == "/sub")
+async def sub_command(message: types.Message):
+    sub_url = "https://your-payment-link.com"  # ← потом сюда реальную ссылку
+    await message.answer(
+        "🔗 <b>Оплатить подписку</b>\n\nПерейди по ссылке:\n" + sub_url,
+        disable_web_page_preview=True
+    )
 
 @app.on_event("startup")
 async def on_startup():
     await db.connect()
     logging.info("Database connected")
+    await set_bot_commands(bot)
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -106,7 +146,6 @@ async def handle_voice(message: types.Message):
     except Exception:
         await message.answer("Не получилось обработать голосовое 😢")
         return
-    # Распознаём текст
     try:
         with open(wav_path, "rb") as audio_file:
             transcript = openai_client.audio.transcriptions.create(
@@ -125,11 +164,8 @@ async def handle_voice(message: types.Message):
             os.remove(wav_path)
         except Exception:
             pass
-    # Сохраняем сообщение пользователя в истории
     await db.add_message(user_id, "user", user_text)
-    # Достаём последние 16 сообщений пользователя (контекст)
     history = await db.get_history(user_id, limit=16)
-    # GPT-4o отвечает с учетом истории
     try:
         gpt_response = openai_client.chat.completions.create(
             model="gpt-4o",
@@ -147,9 +183,11 @@ async def handle_text(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
 
-    # Сохраняем вопрос пользователя
+    # не дублируем логику help/sub если уже обработали выше
+    if user_text in ["/help", "/sub"]:
+        return
+
     await db.add_message(user_id, "user", user_text)
-    # Достаём последние 16 сообщений для контекста
     history = await db.get_history(user_id, limit=16)
     try:
         gpt_response = openai_client.chat.completions.create(
@@ -165,6 +203,7 @@ async def handle_text(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
