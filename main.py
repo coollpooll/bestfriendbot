@@ -51,3 +51,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(on_startup())
     dp.run_polling(bot)
+<<<<<<< HEAD
+=======
+
+>>>>>>> 8fb2d2bac17519e17c37abc839784d4dec020c4d
