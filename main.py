@@ -1,7 +1,8 @@
 import os
 import logging
 import re
-import base64  # Добавил base64!
+import base64
+import httpx  # <--- ДОБАВИЛ! для SerpAPI
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
@@ -40,10 +41,32 @@ ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
+SERPAPI_KEY = "78f4b4abef2f975f1b0576411a18c0d03e0e9999ae764e470e4e3ca6b10fdfcc"
+
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# --- Поиск Яндекс через SerpAPI ---
+async def yandex_search(query):
+    params = {
+        "engine": "yandex",
+        "text": query,
+        "api_key": SERPAPI_KEY,
+        "lang": "ru"
+    }
+    url = "https://serpapi.com/search"
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(url, params=params)
+        data = r.json()
+        snippets = []
+        for result in data.get("organic_results", [])[:3]:
+            title = result.get('title', '')
+            link = result.get('link', '')
+            snippet = result.get('snippet', '')
+            snippets.append(f"{title}\n{snippet}\n{link}".strip())
+        return "\n\n".join(snippets) if snippets else None
 
 # --- Database logic
 class Database:
@@ -292,6 +315,34 @@ async def handle_text(message: types.Message):
             messages=history,
         )
         answer = gpt_response.choices[0].message.content
+
+        # <-- Вот здесь ловим "бот не знает", автоматом подгружаем Яндекс -->
+        if any(x in answer.lower() for x in [
+            "не имею доступа к текущему времени",
+            "не имею доступа к интернету",
+            "я не могу узнать",
+            "я не знаю",
+            "я не обладаю актуальной информацией",
+            "моя база устарела",
+            "не могу ответить на этот вопрос",
+            "у меня нет информации",
+            "по состоянию на"
+        ]):
+            search_results = await yandex_search(user_text)
+            if search_results:
+                prompt = (
+                    f"Вопрос: {user_text}\n"
+                    f"Вот что найдено в Яндексе:\n{search_results}\n"
+                    "Сделай итоговый, грамотный и краткий вывод, если что-то важно — объясни простыми словами."
+                )
+                gpt_response = openai_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                answer = gpt_response.choices[0].message.content
+            else:
+                answer = "Я не нашёл свежей информации по твоему запросу."
+
         await db.add_message(user_id, "assistant", answer)
 
         if should_send_as_file(answer):
@@ -521,6 +572,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
