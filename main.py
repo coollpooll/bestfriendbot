@@ -127,6 +127,8 @@ async def sub_command(message: types.Message):
 async def on_startup():
     await db.connect()
     logging.info("Database connected")
+    # Убираем меню команд Telegram полностью
+    await bot.delete_my_commands()
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -149,7 +151,6 @@ IMAGE_KEYWORDS = [
 @dp.message(F.text)
 async def universal_image_handler(message: types.Message):
     text = message.text.strip().lower()
-    # Не триггерить на "помощь", "подписка"
     if text in ["помощь", "подписка"]:
         return
     for pattern in IMAGE_KEYWORDS:
@@ -170,8 +171,7 @@ async def universal_image_handler(message: types.Message):
                 await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — просто напиши новый запрос.")
             except Exception as e:
                 await message.answer("Ошибка при генерации картинки 😔")
-            return  # Не обрабатывать далее как текст!
-    # Не картинка — просто текстовый запрос в GPT-4o
+            return
     await handle_text(message)
 
 def should_send_as_file(text):
@@ -220,7 +220,6 @@ async def handle_text(message: types.Message):
         answer = gpt_response.choices[0].message.content
         await db.add_message(user_id, "assistant", answer)
 
-        # ===== Если это код — отправляем как файл =====
         if should_send_as_file(answer):
             file_name = await generate_filename(user_text, answer)
             with open(file_name, "w", encoding="utf-8") as f:
@@ -415,6 +414,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
