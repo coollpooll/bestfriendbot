@@ -4,6 +4,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties  # <--- Новый импорт
 from dotenv import load_dotenv
 import asyncpg
 from fastapi import FastAPI, Request
@@ -20,7 +21,11 @@ ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+# Новый способ создания Bot:
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -84,7 +89,7 @@ async def handle_voice(message: types.Message):
     except Exception as e:
         await message.answer("Не получилось обработать голосовое 😢")
         return
-    # Отправляем в OpenAI
+    # Отправляем в OpenAI Whisper (file=, без filename=!)
     try:
         with open(wav_path, "rb") as audio_file:
             transcript = openai_client.audio.transcriptions.create(
@@ -96,7 +101,7 @@ async def handle_voice(message: types.Message):
         prompt = transcript.text if hasattr(transcript, "text") else str(transcript)
         await message.answer(f"Твой текст: {prompt}")
     except Exception as e:
-        await message.answer("Ошибка при распознавании голосового 😔")
+        await message.answer(f"Ошибка при распознавании голосового 😔\n{e}")
         return
     # Удаляем временные файлы
     try:
@@ -109,6 +114,7 @@ async def handle_voice(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
