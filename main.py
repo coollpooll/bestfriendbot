@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import base64  # Добавил base64!
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
@@ -357,18 +358,29 @@ async def handle_photo(message: types.Message):
     user_id = message.from_user.id
     photo = message.photo[-1]
     file = await bot.get_file(photo.file_id)
-    img_bytes = await bot.download_file(file.file_path)
-    image_data = img_bytes.read()
-    gpt_messages = [{"role": "user", "content": [{"type": "text", "text": message.caption or "Что на фото?"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_data.hex()}}]}]
+    photo_bytes_io = await bot.download_file(file.file_path)
+    photo_bytes = photo_bytes_io.read()
+    image_b64 = base64.b64encode(photo_bytes).decode('utf-8')
+    image_data_url = f"data:image/jpeg;base64,{image_b64}"
+    prompt = message.caption or "Опиши что на фото"
+    gpt_messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_url}}
+            ]
+        }
+    ]
     try:
         gpt_response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=gpt_messages
         )
         answer = gpt_response.choices[0].message.content
-        await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer(answer, reply_markup=get_main_keyboard(user_id))
     except Exception:
-        await message.answer("Ошибка при распознавании изображения 😔", reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer("Ошибка при распознавании изображения 😔", reply_markup=get_main_keyboard(user_id))
 
 # ------- Распознавание документов (мультитригер) --------
 @dp.message(F.document)
@@ -462,19 +474,27 @@ async def handle_document(message: types.Message):
     elif filename.endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")):
         file_bytes.seek(0)
         image_data = file_bytes.read()
+        image_b64 = base64.b64encode(image_data).decode('utf-8')
+        image_data_url = f"data:image/jpeg;base64,{image_b64}"
+        prompt = message.caption or "Опиши что на фото"
+        gpt_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}}
+                ]
+            }
+        ]
         try:
-            gpt_messages = [{"role": "user", "content": [
-                {"type": "text", "text": message.caption or "Что на фото?"},
-                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_data.hex()}}
-            ]}]
             gpt_response = openai_client.chat.completions.create(
                 model="gpt-4o",
                 messages=gpt_messages
             )
             answer = gpt_response.choices[0].message.content
-            await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
+            await message.answer(answer, reply_markup=get_main_keyboard(user_id))
         except Exception:
-            await message.answer("Ошибка при распознавании изображения 😔", reply_markup=get_main_keyboard(message.from_user.id))
+            await message.answer("Ошибка при распознавании изображения 😔", reply_markup=get_main_keyboard(user_id))
         return
     else:
         try:
@@ -501,6 +521,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
