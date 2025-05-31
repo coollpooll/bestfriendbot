@@ -7,5 +7,6 @@ pydub==0.25.1
 SpeechRecognition==3.10.1
 Pillow==10.3.0
 uvicorn==0.29.0
+fastapi==0.111.0
 
 
