@@ -84,22 +84,34 @@ class Database:
             )
             return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
+    # --- Статистика для админа ---
+    async def get_stats(self):
+        async with self.pool.acquire() as connection:
+            users = await connection.fetchval("SELECT COUNT(*) FROM users")
+            monthly = await connection.fetchval(
+                "SELECT COUNT(*) FROM subscriptions WHERE plan = 'monthly'")
+            yearly = await connection.fetchval(
+                "SELECT COUNT(*) FROM subscriptions WHERE plan = 'yearly'")
+            return users, monthly, yearly
+
 db = Database(DATABASE_URL)
 
-# --- Только стильные кнопки
-main_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
+# --- Клавиатура с видимостью кнопки "АДМИН" только для OWNER_CHAT_ID
+def get_main_keyboard(user_id):
+    buttons = [
         [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")]
-    ],
-    resize_keyboard=True
-)
+    ]
+    if user_id == OWNER_CHAT_ID:
+        buttons[0].append(KeyboardButton(text="АДМИН"))
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await db.add_user(message.from_user.id)
+    keyboard = get_main_keyboard(message.from_user.id)
     await message.answer(
         "Привет! Я твой BEST FRIEND 🤖\nГотов помочь с любыми вопросами!",
-        reply_markup=main_keyboard
+        reply_markup=keyboard
     )
 
 @dp.message(F.text.lower() == "помощь")
@@ -113,22 +125,35 @@ async def help_command(message: types.Message):
         "<b>Генерируй картинки текстом! Просто напиши 'нарисуй ленина в бане' или 'создай картинку тигра в очках'.</b>\n"
         "<b>Для расширенного доступа — оформи подписку через ПОДПИСКА.</b>\n"
     )
-    await message.answer(help_text)
+    await message.answer(help_text, reply_markup=get_main_keyboard(message.from_user.id))
 
 @dp.message(F.text.lower() == "подписка")
 async def sub_command(message: types.Message):
     sub_url = "https://your-payment-link.com"
     await message.answer(
         "🔗 <b>Оплатить подписку</b>\n\nПерейди по ссылке:\n" + sub_url,
-        disable_web_page_preview=True
+        disable_web_page_preview=True,
+        reply_markup=get_main_keyboard(message.from_user.id)
     )
+
+@dp.message(F.text.lower() == "админ")
+async def admin_stats(message: types.Message):
+    if message.from_user.id != OWNER_CHAT_ID:
+        return
+    users, monthly, yearly = await db.get_stats()
+    msg = (
+        f"<b>Статистика 👑</b>\n"
+        f"Пользователей: <b>{users}</b>\n"
+        f"Месячных подписок: <b>{monthly}</b>\n"
+        f"Годовых подписок: <b>{yearly}</b>"
+    )
+    await message.answer(msg, reply_markup=get_main_keyboard(message.from_user.id))
 
 @app.on_event("startup")
 async def on_startup():
     await db.connect()
     logging.info("Database connected")
-    # Убираем меню команд Telegram полностью
-    await bot.delete_my_commands()
+    await bot.delete_my_commands()  # Нет меню команд
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -151,14 +176,14 @@ IMAGE_KEYWORDS = [
 @dp.message(F.text)
 async def universal_image_handler(message: types.Message):
     text = message.text.strip().lower()
-    if text in ["помощь", "подписка"]:
+    if text in ["помощь", "подписка", "админ"]:
         return
     for pattern in IMAGE_KEYWORDS:
         m = re.match(pattern, text)
         if m:
             desc = re.sub(pattern, '', text, count=1).strip(":,. \n")
             if not desc:
-                await message.answer("Опиши, что нужно нарисовать 👩‍🎨")
+                await message.answer("Опиши, что нужно нарисовать 👩‍🎨", reply_markup=get_main_keyboard(message.from_user.id))
                 return
             try:
                 response = openai_client.images.generate(
@@ -168,9 +193,9 @@ async def universal_image_handler(message: types.Message):
                     size="1024x1024"
                 )
                 image_url = response.data[0].url
-                await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — просто напиши новый запрос.")
+                await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — просто напиши новый запрос.", reply_markup=get_main_keyboard(message.from_user.id))
             except Exception as e:
-                await message.answer("Ошибка при генерации картинки 😔")
+                await message.answer("Ошибка при генерации картинки 😔", reply_markup=get_main_keyboard(message.from_user.id))
             return
     await handle_text(message)
 
@@ -225,12 +250,12 @@ async def handle_text(message: types.Message):
             with open(file_name, "w", encoding="utf-8") as f:
                 f.write(answer)
             with open(file_name, "rb") as f:
-                await message.answer_document(types.BufferedInputFile(f.read(), file_name), caption="Готово! Вот твой файл 👇")
+                await message.answer_document(types.BufferedInputFile(f.read(), file_name), caption="Готово! Вот твой файл 👇", reply_markup=get_main_keyboard(message.from_user.id))
             os.remove(file_name)
         else:
-            await message.answer(answer)
+            await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
     except Exception:
-        await message.answer("Ошибка при получении ответа от ИИ 🤖")
+        await message.answer("Ошибка при получении ответа от ИИ 🤖", reply_markup=get_main_keyboard(message.from_user.id))
 
 # ------- Голосовые сообщения (Whisper + GPT-4o) --------
 @dp.message(F.voice)
@@ -245,7 +270,7 @@ async def handle_voice(message: types.Message):
         audio = AudioSegment.from_file(ogg_path, format="ogg")
         audio.export(wav_path, format="wav")
     except Exception:
-        await message.answer("Не получилось обработать голосовое 😢")
+        await message.answer("Не получилось обработать голосовое 😢", reply_markup=get_main_keyboard(message.from_user.id))
         return
     try:
         with open(wav_path, "rb") as audio_file:
@@ -257,7 +282,7 @@ async def handle_voice(message: types.Message):
             )
         user_text = transcript.text if hasattr(transcript, "text") else str(transcript)
     except Exception:
-        await message.answer("Ошибка при распознавании голосового 😔")
+        await message.answer("Ошибка при распознавании голосового 😔", reply_markup=get_main_keyboard(message.from_user.id))
         return
     finally:
         try:
@@ -274,9 +299,9 @@ async def handle_voice(message: types.Message):
         )
         answer = gpt_response.choices[0].message.content
         await db.add_message(user_id, "assistant", answer)
-        await message.answer(answer)
+        await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
     except Exception:
-        await message.answer("Ошибка при получении ответа от ИИ 🤖")
+        await message.answer("Ошибка при получении ответа от ИИ 🤖", reply_markup=get_main_keyboard(message.from_user.id))
 
 # ------- Распознавание изображений (GPT-4o Vision) --------
 @dp.message(F.photo)
@@ -293,9 +318,9 @@ async def handle_photo(message: types.Message):
             messages=gpt_messages
         )
         answer = gpt_response.choices[0].message.content
-        await message.answer(answer)
+        await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
     except Exception:
-        await message.answer("Ошибка при распознавании изображения 😔")
+        await message.answer("Ошибка при распознавании изображения 😔", reply_markup=get_main_keyboard(message.from_user.id))
 
 # ------- Распознавание документов (мультитригер) --------
 @dp.message(F.document)
@@ -407,13 +432,14 @@ async def handle_document(message: types.Message):
         )
         answer = gpt_response.choices[0].message.content
         await db.add_message(user_id, "assistant", answer)
-        await message.answer(answer)
+        await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
     except Exception:
-        await message.answer("Ошибка при обработке файла 🤖")
+        await message.answer("Ошибка при обработке файла 🤖", reply_markup=get_main_keyboard(message.from_user.id))
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
