@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
-from aiogram.client.bot import DefaultBotProperties  # ДОБАВИЛ ИМПОРТ!
+from aiogram.client.bot import DefaultBotProperties
 from dotenv import load_dotenv
 import asyncpg
 from fastapi import FastAPI, Request
@@ -21,12 +21,12 @@ ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))  # Исправлено тут!
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Пример Database класса (заглушка)
+# --- Database logic
 class Database:
     def __init__(self, dsn):
         self.dsn = dsn
@@ -45,6 +45,27 @@ class Database:
                 "INSERT INTO users (user_id, requests_today) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
                 user_id, 0
             )
+
+    async def add_message(self, user_id, role, content):
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                "INSERT INTO dialog_history (user_id, role, content) VALUES ($1, $2, $3)",
+                user_id, role, content
+            )
+
+    async def get_history(self, user_id, limit=16):
+        async with self.pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT role, content FROM dialog_history
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                user_id, limit
+            )
+            # Вернуть список в правильном порядке (сначала старые)
+            return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
 db = Database(DATABASE_URL)
 
@@ -70,22 +91,22 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# ------- Голосовые сообщения через Whisper + pydub + GPT --------
+# ------- Голосовые сообщения через Whisper + pydub + GPT-4o --------
 @dp.message(F.voice)
 async def handle_voice(message: types.Message):
+    user_id = message.from_user.id
     file_id = message.voice.file_id
     file = await bot.get_file(file_id)
-    ogg_path = f"voice_{message.from_user.id}.ogg"
-    wav_path = f"voice_{message.from_user.id}.wav"
+    ogg_path = f"voice_{user_id}.ogg"
+    wav_path = f"voice_{user_id}.wav"
     await bot.download_file(file.file_path, ogg_path)
-    # Переводим ogg в wav (формат, который понимает OpenAI)
     try:
         audio = AudioSegment.from_file(ogg_path, format="ogg")
         audio.export(wav_path, format="wav")
-    except Exception as e:
+    except Exception:
         await message.answer("Не получилось обработать голосовое 😢")
         return
-    # Отправляем в OpenAI на распознавание текста
+    # Распознаём текст
     try:
         with open(wav_path, "rb") as audio_file:
             transcript = openai_client.audio.transcriptions.create(
@@ -95,30 +116,56 @@ async def handle_voice(message: types.Message):
                 language="ru"
             )
         user_text = transcript.text if hasattr(transcript, "text") else str(transcript)
-    except Exception as e:
+    except Exception:
         await message.answer("Ошибка при распознавании голосового 😔")
         return
     finally:
-        # Удаляем временные файлы всегда
         try:
             os.remove(ogg_path)
             os.remove(wav_path)
         except Exception:
             pass
-    # Отправляем распознанный текст в GPT и возвращаем ОТВЕТ
+    # Сохраняем сообщение пользователя в истории
+    await db.add_message(user_id, "user", user_text)
+    # Достаём последние 16 сообщений пользователя (контекст)
+    history = await db.get_history(user_id, limit=16)
+    # GPT-4o отвечает с учетом истории
     try:
         gpt_response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": user_text}],
+            model="gpt-4o",
+            messages=history,
         )
         answer = gpt_response.choices[0].message.content
+        await db.add_message(user_id, "assistant", answer)
         await message.answer(answer)
-    except Exception as e:
+    except Exception:
+        await message.answer("Ошибка при получении ответа от ИИ 🤖")
+
+# ------- Текстовые сообщения (GPT-4o + память) --------
+@dp.message(F.text)
+async def handle_text(message: types.Message):
+    user_id = message.from_user.id
+    user_text = message.text
+
+    # Сохраняем вопрос пользователя
+    await db.add_message(user_id, "user", user_text)
+    # Достаём последние 16 сообщений для контекста
+    history = await db.get_history(user_id, limit=16)
+    try:
+        gpt_response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=history,
+        )
+        answer = gpt_response.choices[0].message.content
+        await db.add_message(user_id, "assistant", answer)
+        await message.answer(answer)
+    except Exception:
         await message.answer("Ошибка при получении ответа от ИИ 🤖")
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
