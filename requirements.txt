@@ -15,6 +15,5 @@ python-pptx>=0.6.23
 textract==1.6.5
 xlrd>=2.0.1
 openpyxl>=3.1.2
-pandas>=2.2.26
-
+pandas>=2.2.3
 
