@@ -50,9 +50,9 @@ app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --- Поиск Google AI Overview через SerpAPI ---
-async def google_ai_overview_search(query):
+async def google_ai_search(query):
     params = {
-        "engine": "google_ai",
+        "engine": "google_ai_overview",
         "q": query,
         "api_key": SERPAPI_KEY,
         "hl": "ru"
@@ -61,14 +61,16 @@ async def google_ai_overview_search(query):
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(url, params=params)
         data = r.json()
-        overview = data.get("ai_overview", {}).get("content")
+        overview = data.get("ai_overview", {}).get("answer")
+        if overview:
+            return overview
+        # fallback на топ-результаты поиска, если ai_overview пустой:
         snippets = []
         for result in data.get("organic_results", [])[:3]:
             title = result.get('title', '')
+            link = result.get('link', '')
             snippet = result.get('snippet', '')
-            snippets.append(f"{title}\n{snippet}".strip())
-        if overview:
-            return f"{overview}\n\n" + "\n\n".join(snippets)
+            snippets.append(f"{title}\n{snippet}\n{link}".strip())
         return "\n\n".join(snippets) if snippets else None
 
 # --- Database logic
@@ -355,7 +357,7 @@ async def handle_text(message: types.Message):
         )
         answer = gpt_response.choices[0].message.content
 
-        if any(x in answer.lower() for x in [
+        SEARCH_TRIGGERS = [
             "не имею доступа к текущему времени",
             "не имею доступа к интернету",
             "я не могу узнать",
@@ -364,9 +366,16 @@ async def handle_text(message: types.Message):
             "моя база устарела",
             "не могу ответить на этот вопрос",
             "у меня нет информации",
-            "по состоянию на"
-        ]):
-            search_results = await google_ai_overview_search(user_text)
+            "по состоянию на",
+            "пожалуйста, проверьте актуальную информацию",
+            "моя база данных не обновляется в реальном времени",
+            "вы можете посмотреть актуальную стоимость",
+            "я не могу предоставить текущую цену"
+        ]
+
+        # Если GPT не знает — делаем реальный поиск!
+        if any(x in answer.lower() for x in SEARCH_TRIGGERS):
+            search_results = await google_ai_search(user_text)
             if search_results:
                 prompt = (
                     f"Вопрос: {user_text}\n"
@@ -611,6 +620,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
