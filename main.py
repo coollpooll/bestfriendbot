@@ -2,8 +2,8 @@ import os
 import logging
 import re
 import base64
-import httpx
-import datetime
+import httpx  # <--- для SerpAPI
+import datetime  # <--- для времени
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
@@ -32,8 +32,6 @@ import xlrd
 import openpyxl
 import textract
 
-from selectolax.parser import HTMLParser  # <--- добавлен для DuckDuckGo
-
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -44,28 +42,60 @@ ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
+SERPAPI_KEY = "78f4b4abef2f975f1b0576411a18c0d03e0e9999ae764e470e4e3ca6b10fdfcc"
+
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Бесплатный поиск через DuckDuckGo ---
-async def duckduckgo_search(query):
-    url = "https://duckduckgo.com/html/"
-    params = {"q": query}
-    headers = {
-        "User-Agent": "Mozilla/5.0"
+# --- Поиск Google AI Overview через SerpAPI (с переводом на EN) ---
+async def google_ai_search(query):
+    # Переводим на английский через OpenAI, если русский
+    detect_lang = await openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": f"Определи, на каком языке этот запрос: {query}. Только ответь 'ru' или 'en'."}],
+        max_tokens=2,
+        temperature=0
+    )
+    lang = detect_lang.choices[0].message.content.strip().lower()
+    if lang == "ru":
+        # Переводим на английский (коротко и по делу)
+        tr = await openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"Переведи на английский: {query}"}],
+            max_tokens=60,
+            temperature=0
+        )
+        query_en = tr.choices[0].message.content.strip()
+    else:
+        query_en = query
+
+    params = {
+        "engine": "google_ai_overview",
+        "q": query_en,
+        "api_key": SERPAPI_KEY,
+        "hl": "en"
     }
+    url = "https://serpapi.com/search"
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(url, params=params, headers=headers)
-        tree = HTMLParser(r.text)
+        r = await client.get(url, params=params)
+        if r.status_code != 200:
+            # fallback на обычный Google Search
+            params["engine"] = "google"
+            r = await client.get(url, params=params)
+        data = r.json()
+        overview = data.get("ai_overview", {}).get("answer")
+        if overview:
+            return overview
+        # fallback: топ-результаты
         snippets = []
-        for res in tree.css('a.result__a'):
-            title = res.text()
-            link = res.attributes.get("href")
-            if title and link:
-                snippets.append(f"{title}\n{link}")
-        return "\n\n".join(snippets[:3]) if snippets else None
+        for result in data.get("organic_results", [])[:3]:
+            title = result.get('title', '')
+            link = result.get('link', '')
+            snippet = result.get('snippet', '')
+            snippets.append(f"{title}\n{snippet}\n{link}".strip())
+        return "\n\n".join(snippets) if snippets else None
 
 # --- Database logic
 class Database:
@@ -329,6 +359,7 @@ async def generate_filename(prompt, answer):
 # ----------- ВСТАВКА: обработка времени --------------
 def is_time_question(text):
     text = text.lower()
+    # Любая форма: "время", "час", "time" в любой части запроса
     return bool(re.search(r"\b(время|час|time)\b", text))
 
 async def handle_text(message: types.Message):
@@ -366,12 +397,13 @@ async def handle_text(message: types.Message):
             "я не могу предоставить текущую цену"
         ]
 
+        # Если GPT не знает — делаем реальный поиск!
         if any(x in answer.lower() for x in SEARCH_TRIGGERS):
-            search_results = await duckduckgo_search(user_text)
+            search_results = await google_ai_search(user_text)
             if search_results:
                 prompt = (
                     f"Вопрос: {user_text}\n"
-                    f"Вот что найдено в DuckDuckGo:\n{search_results}\n"
+                    f"Вот что найдено в Google AI Overview:\n{search_results}\n"
                     "Сделай итоговый, грамотный и краткий вывод, если что-то важно — объясни простыми словами."
                 )
                 gpt_response = openai_client.chat.completions.create(
@@ -612,6 +644,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
