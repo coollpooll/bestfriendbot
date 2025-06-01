@@ -49,24 +49,26 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Поиск Яндекс через SerpAPI ---
-async def yandex_search(query):
+# --- Поиск Google AI Overview через SerpAPI ---
+async def google_ai_overview_search(query):
     params = {
-        "engine": "yandex",
-        "text": query,
+        "engine": "google_ai",
+        "q": query,
         "api_key": SERPAPI_KEY,
-        "lang": "ru"
+        "hl": "ru"
     }
     url = "https://serpapi.com/search"
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(url, params=params)
         data = r.json()
+        overview = data.get("ai_overview", {}).get("content")
         snippets = []
         for result in data.get("organic_results", [])[:3]:
             title = result.get('title', '')
-            link = result.get('link', '')
             snippet = result.get('snippet', '')
-            snippets.append(f"{title}\n{snippet}\n{link}".strip())
+            snippets.append(f"{title}\n{snippet}".strip())
+        if overview:
+            return f"{overview}\n\n" + "\n\n".join(snippets)
         return "\n\n".join(snippets) if snippets else None
 
 # --- Database logic
@@ -364,11 +366,11 @@ async def handle_text(message: types.Message):
             "у меня нет информации",
             "по состоянию на"
         ]):
-            search_results = await yandex_search(user_text)
+            search_results = await google_ai_overview_search(user_text)
             if search_results:
                 prompt = (
                     f"Вопрос: {user_text}\n"
-                    f"Вот что найдено в Яндексе:\n{search_results}\n"
+                    f"Вот что найдено в Google AI Overview:\n{search_results}\n"
                     "Сделай итоговый, грамотный и краткий вывод, если что-то важно — объясни простыми словами."
                 )
                 gpt_response = openai_client.chat.completions.create(
@@ -609,6 +611,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
