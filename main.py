@@ -50,21 +50,46 @@ app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --- Поиск Google AI Overview через SerpAPI ---
+# --- Поиск Google AI Overview через SerpAPI (с переводом на EN) ---
 async def google_ai_search(query):
+    # Переводим на английский через OpenAI, если русский
+    detect_lang = await openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": f"Определи, на каком языке этот запрос: {query}. Только ответь 'ru' или 'en'."}],
+        max_tokens=2,
+        temperature=0
+    )
+    lang = detect_lang.choices[0].message.content.strip().lower()
+    if lang == "ru":
+        # Переводим на английский (коротко и по делу)
+        tr = await openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"Переведи на английский: {query}"}],
+            max_tokens=60,
+            temperature=0
+        )
+        query_en = tr.choices[0].message.content.strip()
+    else:
+        query_en = query
+
     params = {
         "engine": "google_ai_overview",
-        "q": query,
+        "q": query_en,
         "api_key": SERPAPI_KEY,
-        "hl": "ru"
+        "hl": "en"
     }
     url = "https://serpapi.com/search"
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(url, params=params)
+        if r.status_code != 200:
+            # fallback на обычный Google Search
+            params["engine"] = "google"
+            r = await client.get(url, params=params)
         data = r.json()
         overview = data.get("ai_overview", {}).get("answer")
         if overview:
             return overview
-        # fallback на топ-результаты поиска, если ai_overview пустой:
+        # fallback: топ-результаты
         snippets = []
         for result in data.get("organic_results", [])[:3]:
             title = result.get('title', '')
@@ -72,6 +97,7 @@ async def google_ai_search(query):
             snippet = result.get('snippet', '')
             snippets.append(f"{title}\n{snippet}\n{link}".strip())
         return "\n\n".join(snippets) if snippets else None
+
 
 # --- Database logic
 class Database:
