@@ -2,8 +2,8 @@ import os
 import logging
 import re
 import base64
-import httpx  # <--- для SerpAPI
-import datetime  # <--- для времени
+import httpx
+import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
@@ -42,60 +42,10 @@ ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
-SERPAPI_KEY = "78f4b4abef2f975f1b0576411a18c0d03e0e9999ae764e470e4e3ca6b10fdfcc"
-
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-
-# --- Поиск Google AI Overview через SerpAPI (с переводом на EN) ---
-async def google_ai_search(query):
-    # Переводим на английский через OpenAI, если русский
-    detect_lang = await openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": f"Определи, на каком языке этот запрос: {query}. Только ответь 'ru' или 'en'."}],
-        max_tokens=2,
-        temperature=0
-    )
-    lang = detect_lang.choices[0].message.content.strip().lower()
-    if lang == "ru":
-        # Переводим на английский (коротко и по делу)
-        tr = await openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": f"Переведи на английский: {query}"}],
-            max_tokens=60,
-            temperature=0
-        )
-        query_en = tr.choices[0].message.content.strip()
-    else:
-        query_en = query
-
-    params = {
-        "engine": "google_ai_overview",
-        "q": query_en,
-        "api_key": SERPAPI_KEY,
-        "hl": "en"
-    }
-    url = "https://serpapi.com/search"
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(url, params=params)
-        if r.status_code != 200:
-            # fallback на обычный Google Search
-            params["engine"] = "google"
-            r = await client.get(url, params=params)
-        data = r.json()
-        overview = data.get("ai_overview", {}).get("answer")
-        if overview:
-            return overview
-        # fallback: топ-результаты
-        snippets = []
-        for result in data.get("organic_results", [])[:3]:
-            title = result.get('title', '')
-            link = result.get('link', '')
-            snippet = result.get('snippet', '')
-            snippets.append(f"{title}\n{snippet}\n{link}".strip())
-        return "\n\n".join(snippets) if snippets else None
 
 # --- Database logic
 class Database:
@@ -237,7 +187,6 @@ async def help_command(message: types.Message):
     )
     await message.answer(help_text, reply_markup=get_main_keyboard(message.from_user.id))
 
-
 @dp.message(F.text.lower() == "подписка")
 async def sub_command(message: types.Message):
     sub_url = "https://your-payment-link.com"
@@ -300,7 +249,7 @@ IMAGE_KEYWORDS = [
 
 @dp.message(F.text)
 async def universal_image_handler(message: types.Message):
-    text = message.text.strip().lower()
+    text = getattr(message, 'text', '').strip().lower()
     if text in ["помощь", "подписка", "админ"]:
         return
     for pattern in IMAGE_KEYWORDS:
@@ -356,17 +305,14 @@ async def generate_filename(prompt, answer):
         name = "answer.txt"
     return name
 
-# ----------- ВСТАВКА: обработка времени --------------
 def is_time_question(text):
     text = text.lower()
-    # Любая форма: "время", "час", "time" в любой части запроса
     return bool(re.search(r"\b(время|час|time)\b", text))
 
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
-    user_text = message.text
+    user_text = getattr(message, 'text', '')
 
-    # Если вопрос о времени — отвечаем локальным временем
     if is_time_question(user_text):
         now = datetime.datetime.now().strftime("%H:%M:%S")
         await message.answer(f"Сейчас {now}", reply_markup=get_main_keyboard(user_id))
@@ -397,22 +343,8 @@ async def handle_text(message: types.Message):
             "я не могу предоставить текущую цену"
         ]
 
-        # Если GPT не знает — делаем реальный поиск!
         if any(x in answer.lower() for x in SEARCH_TRIGGERS):
-            search_results = await google_ai_search(user_text)
-            if search_results:
-                prompt = (
-                    f"Вопрос: {user_text}\n"
-                    f"Вот что найдено в Google AI Overview:\n{search_results}\n"
-                    "Сделай итоговый, грамотный и краткий вывод, если что-то важно — объясни простыми словами."
-                )
-                gpt_response = openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                answer = gpt_response.choices[0].message.content
-            else:
-                answer = "Я не нашёл свежей информации по твоему запросу."
+            answer = "Я не нашёл свежей информации по твоему запросу."
 
         await db.add_message(user_id, "assistant", answer)
 
@@ -427,9 +359,8 @@ async def handle_text(message: types.Message):
             await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
     except Exception:
         await message.answer("Ошибка при получении ответа от ИИ 🤖", reply_markup=get_main_keyboard(message.from_user.id))
-# ----------- КОНЕЦ ВСТАВКИ -------------
 
-# ------- Голосовые сообщения (Whisper + GPT-4o) --------
+# ------- Голосовые сообщения с поддержкой генерации картинок --------
 @dp.message(F.voice)
 async def handle_voice(message: types.Message):
     user_id = message.from_user.id
@@ -462,18 +393,9 @@ async def handle_voice(message: types.Message):
             os.remove(wav_path)
         except Exception:
             pass
-    await db.add_message(user_id, "user", user_text)
-    history = await db.get_history(user_id, limit=16)
-    try:
-        gpt_response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=history,
-        )
-        answer = gpt_response.choices[0].message.content
-        await db.add_message(user_id, "assistant", answer)
-        await message.answer(answer, reply_markup=get_main_keyboard(message.from_user.id))
-    except Exception:
-        await message.answer("Ошибка при получении ответа от ИИ 🤖", reply_markup=get_main_keyboard(message.from_user.id))
+    # -- Критичное изменение! --
+    message.text = user_text
+    await universal_image_handler(message)
 
 # ------- Распознавание изображений (GPT-4o Vision) --------
 @dp.message(F.photo)
@@ -644,6 +566,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
