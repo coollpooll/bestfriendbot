@@ -404,14 +404,104 @@ async def handle_voice(message: types.Message):
 async def handle_photo(message: types.Message):
     pass  # здесь твоя логика или ничего, если FSM
 
-# ------- Распознавание документов (мультитригер) --------
+# ------- Распознавание документов (GPT-4o + резюме) --------
 @dp.message(F.document)
 async def handle_document(message: types.Message):
-    pass  # здесь твоя логика или ничего, если FSM
+    user_id = message.from_user.id
+    doc = message.document
+    filename = doc.file_name.lower()
+    file = await bot.get_file(doc.file_id)
+    f = BytesIO()
+    await bot.download_file(file.file_path, destination=f)
+    f.seek(0)
+
+    text = ""
+    error = None
+    try:
+        if filename.endswith('.pdf'):
+            pdf = PdfReader(f)
+            text = "".join([page.extract_text() or "" for page in pdf.pages])
+        elif filename.endswith('.docx'):
+            docx_file = DocxDocument(f)
+            text = "\n".join([p.text for p in docx_file.paragraphs])
+        elif filename.endswith('.txt'):
+            text = f.read().decode('utf-8', errors='ignore')
+        elif filename.endswith('.csv'):
+            f.seek(0)
+            lines = []
+            reader = csv.reader(f.read().decode('utf-8', errors='ignore').splitlines())
+            for row in reader:
+                lines.append(','.join(row))
+            text = "\n".join(lines)
+        elif filename.endswith('.xlsx'):
+            wb = openpyxl.load_workbook(f, read_only=True)
+            ws = wb.active
+            lines = []
+            for row in ws.iter_rows(values_only=True):
+                lines.append("\t".join([str(cell) for cell in row if cell is not None]))
+            text = "\n".join(lines)
+        elif filename.endswith('.xls'):
+            book = xlrd.open_workbook(file_contents=f.read())
+            sheet = book.sheet_by_index(0)
+            lines = []
+            for rx in range(sheet.nrows):
+                lines.append("\t".join([str(cell) for cell in sheet.row_values(rx)]))
+            text = "\n".join(lines)
+        elif filename.endswith('.pptx'):
+            ppt = pptx.Presentation(f)
+            slides = []
+            for slide in ppt.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        slides.append(shape.text)
+            text = "\n".join(slides)
+        elif filename.endswith('.zip'):
+            z = zipfile.ZipFile(f)
+            file_list = z.namelist()
+            text = "ZIP-файл, содержит:\n" + "\n".join(file_list)
+        elif filename.endswith('.rar'):
+            r = rarfile.RarFile(f)
+            file_list = r.namelist()
+            text = "RAR-файл, содержит:\n" + "\n".join(file_list)
+        else:
+            try:
+                text = textract.process(filename, input_stream=f).decode('utf-8', errors='ignore')
+            except Exception:
+                error = "Не удалось прочитать файл этим методом."
+    except Exception as e:
+        error = f"Ошибка при чтении файла: {e}"
+
+    if text:
+        # Обрезаем до 4000 символов (GPT-4o ограничение в prompt)
+        chunk = text[:4000]
+        prompt = (
+            f"Сделай краткое, структурированное резюме по этому тексту (выдели основные моменты, сохрани факты, пиши лаконично):\n\n{chunk}"
+        )
+        try:
+            gpt_response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Ты профессиональный ассистент, делаешь структурированные краткие резюме по тексту документа, не придумываешь фактов."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=600
+            )
+            summary = gpt_response.choices[0].message.content.strip()
+            await message.answer(
+                f"📄 <b>Файл:</b> <i>{doc.file_name}</i>\n\n<b>Резюме документа:</b>\n{summary}",
+                reply_markup=get_main_keyboard(user_id),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await message.answer(f"Ошибка при резюмировании через GPT: {e}", reply_markup=get_main_keyboard(user_id))
+    else:
+        await message.answer(f"❌ Не удалось прочитать документ. {error or ''}",
+                             reply_markup=get_main_keyboard(user_id))
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
