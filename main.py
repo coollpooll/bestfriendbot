@@ -1,8 +1,6 @@
 import os
 import logging
 import re
-import base64
-import httpx
 import datetime
 import asyncio
 from io import BytesIO
@@ -11,14 +9,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from dotenv import load_dotenv
 import asyncpg
 from fastapi import FastAPI, Request
 from openai import OpenAI
 from pydub import AudioSegment
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from PIL import Image
 import io
 
@@ -45,9 +41,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
-
-# Replicate API для редактирования фото
-REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
@@ -142,8 +135,7 @@ db = Database(DATABASE_URL)
 
 def get_main_keyboard(user_id):
     buttons = [
-        [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")],
-        [KeyboardButton(text="РЕДАКТИРОВАТЬ ФОТО")]  # НОВАЯ КНОПКА
+        [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")]
     ]
     if user_id == OWNER_CHAT_ID:
         buttons[0].append(KeyboardButton(text="АДМИН"))
@@ -260,87 +252,6 @@ IMAGE_KEYWORDS = [
     r"^(generate|draw|create|make)\s*(image|picture)?",
 ]
 
-# ---------- FSM для редактирования фото ----------------
-class EditPhoto(StatesGroup):
-    waiting_for_photo = State()
-    waiting_for_edit_prompt = State()
-
-@dp.message(F.text.lower() == "редактировать фото")
-async def edit_photo_start(message: types.Message, state: FSMContext):
-    await message.answer("Отправь фото, которое хочешь отредактировать 📸", reply_markup=get_main_keyboard(message.from_user.id))
-    await state.set_state(EditPhoto.waiting_for_photo)
-
-@dp.message(EditPhoto.waiting_for_photo, F.photo)
-async def receive_photo_for_edit(message: types.Message, state: FSMContext):
-    photo = message.photo[-1]
-    file = await bot.get_file(photo.file_id)
-    photo_bytes_io = BytesIO()
-    await bot.download_file(file.file_path, destination=photo_bytes_io)
-    photo_bytes = photo_bytes_io.getvalue()
-    if not photo_bytes:
-        await message.answer("Ошибка: не удалось прочитать файл. Пришли другое фото.")
-        return
-    # Сохраняем фото во временный стейт
-    await state.update_data(photo=photo_bytes)
-    await message.answer("Что изменить на фото? Опиши текстом.", reply_markup=get_main_keyboard(message.from_user.id))
-    await state.set_state(EditPhoto.waiting_for_edit_prompt)
-
-@dp.message(EditPhoto.waiting_for_photo)
-async def wrong_content_photo(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, пришли фото (файл, не стикер)", reply_markup=get_main_keyboard(message.from_user.id))
-
-@dp.message(EditPhoto.waiting_for_edit_prompt, F.text)
-async def process_edit_prompt(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    photo_bytes = data.get("photo")
-    prompt = message.text.strip()
-    await message.answer("Готовлю результат, жди 10-30 сек... 😎", reply_markup=get_main_keyboard(message.from_user.id))
-    try:
-        image_url = await run_replicate_edit(photo_bytes, prompt)
-        await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — загрузи новое фото.", reply_markup=get_main_keyboard(message.from_user.id))
-    except Exception as e:
-        await message.answer(f"Ошибка редактирования: {e}", reply_markup=get_main_keyboard(message.from_user.id))
-    finally:
-        await state.clear()
-
-@dp.message(EditPhoto.waiting_for_edit_prompt)
-async def wrong_content_prompt(message: types.Message, state: FSMContext):
-    await message.answer("Опиши словами, что изменить на фото.")
-
-# ----------- Функция для Replicate (edit) ----------
-async def run_replicate_edit(photo_bytes, prompt):
-    api_token = REPLICATE_API_TOKEN
-    url = "https://api.replicate.com/v1/predictions"
-    img_b64 = base64.b64encode(photo_bytes).decode("utf-8")
-    headers = {
-        "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "version": "7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc",
-        "input": {
-            "prompt": prompt,
-            "image": f"data:image/png;base64,{img_b64}"
-        }
-    }
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        if resp.status_code != 201:
-            raise Exception(f"Replicate error: {resp.status_code}, {resp.text}")
-        prediction = resp.json()
-        prediction_url = prediction["urls"]["get"]
-        while True:
-            r = await client.get(prediction_url, headers=headers)
-            output = r.json()
-            status = output["status"]
-            if status == "succeeded":
-                return output["output"][0]
-            elif status in ["failed", "canceled"]:
-                raise Exception("Replicate: обработка не удалась.")
-            await asyncio.sleep(2)
-
-# ------------------------------------------------------
-
 @dp.message(F.text)
 async def universal_image_handler(message: types.Message):
     await handle_text_or_image(message, message.text)
@@ -385,7 +296,7 @@ def is_time_question(text):
 async def handle_text_or_image(message, text):
     user_id = message.from_user.id
     t = text.strip().lower()
-    if t in ["помощь", "подписка", "админ", "редактировать фото"]:
+    if t in ["помощь", "подписка", "админ"]:
         return
     for pattern in IMAGE_KEYWORDS:
         m = re.match(pattern, t)
@@ -501,6 +412,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
