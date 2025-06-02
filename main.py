@@ -243,14 +243,6 @@ IMAGE_KEYWORDS = [
     r"^(generate|draw|create|make)\s*(image|picture)?",
 ]
 
-def is_web_search_query(text):
-    KEYWORDS = [
-        "новости", "сегодня", "что нового", "тренды", "актуальное", "произошло",
-        "курс", "сколько стоит", "погода", "интернет", "последние события",
-        "что в мире", "текущий", "запроси", "что случилось", "price", "weather", "latest", "now"
-    ]
-    return any(k in text.lower() for k in KEYWORDS)
-
 def should_send_as_file(text):
     if re.search(r"```.*?```", text, re.DOTALL):
         return True
@@ -296,25 +288,6 @@ async def handle_text_or_image(message, text):
     t = text.strip().lower()
     if t in ["помощь", "подписка", "админ"]:
         return
-
-    # --- Web Search via OpenAI Responses API ---
-    if is_web_search_query(text):
-        await message.answer("🔎 Делаю поиск в интернете через OpenAI Web Search, подожди секунду...", reply_markup=get_main_keyboard(user_id))
-        try:
-            response = openai_client.responses.create(
-                model="gpt-4.1",
-                tools=[{
-                    "type": "web_search_preview",
-                    # Можно добавить "search_context_size": "medium", "user_location": {...}
-                }],
-                input=text
-            )
-            answer = response.output_text
-            await message.answer(answer, reply_markup=get_main_keyboard(user_id))
-        except Exception as e:
-            await message.answer(f"Ошибка при поиске в интернете через OpenAI: {e}", reply_markup=get_main_keyboard(user_id))
-        return
-    # --- /Web Search ---
 
     for pattern in IMAGE_KEYWORDS:
         m = re.match(pattern, t)
@@ -490,7 +463,6 @@ async def handle_document(message: types.Message):
         error = f"Ошибка при чтении файла: {e}"
 
     if text:
-        # Обрезаем до 4000 символов (GPT-4o ограничение в prompt)
         chunk = text[:4000]
         prompt = (
             f"Сделай краткое, структурированное резюме по этому тексту (выдели основные моменты, сохрани факты, пиши лаконично):\n\n{chunk}"
@@ -513,12 +485,12 @@ async def handle_document(message: types.Message):
         except Exception as e:
             await message.answer(f"Ошибка при резюмировании через GPT: {e}", reply_markup=get_main_keyboard(user_id))
     else:
-        await message.answer(f"❌ Не удалось прочитать документ. {error or ''}",
-                             reply_markup=get_main_keyboard(user_id))
+        await message.answer(f"❌ Не удалось прочитать документ. {error or ''}", reply_markup=get_main_keyboard(user_id))
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
