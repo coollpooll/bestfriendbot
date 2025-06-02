@@ -15,14 +15,11 @@ from fastapi import FastAPI, Request
 from openai import OpenAI
 from pydub import AudioSegment
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from PIL import Image
-import io
 
-# Импорты для документов
+# Документы
 import mimetypes
 import zipfile
 import rarfile
-
 from PyPDF2 import PdfReader
 from docx import Document as DocxDocument
 import csv
@@ -33,12 +30,11 @@ import openpyxl
 import textract
 
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ASSISTANT_ID = os.getenv("ASSISTANT_ID")  # Для Assistants API
+ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
@@ -47,7 +43,7 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Database logic --- (не менялось)
+# --- Database logic
 class Database:
     def __init__(self, dsn):
         self.dsn = dsn
@@ -187,7 +183,6 @@ async def help_command(message: types.Message):
     )
     await message.answer(help_text, reply_markup=get_main_keyboard(message.from_user.id))
 
-
 @dp.message(F.text.lower() == "подписка")
 async def sub_command(message: types.Message):
     sub_url = "https://your-payment-link.com"
@@ -248,9 +243,13 @@ IMAGE_KEYWORDS = [
     r"^(generate|draw|create|make)\s*(image|picture)?",
 ]
 
-@dp.message(F.text)
-async def universal_image_handler(message: types.Message):
-    await handle_text_or_image(message, message.text)
+def is_web_search_query(text):
+    KEYWORDS = [
+        "новости", "сегодня", "что нового", "тренды", "актуальное", "произошло",
+        "курс", "сколько стоит", "погода", "интернет", "последние события",
+        "что в мире", "текущий", "запроси", "что случилось", "price", "weather", "latest", "now"
+    ]
+    return any(k in text.lower() for k in KEYWORDS)
 
 def should_send_as_file(text):
     if re.search(r"```.*?```", text, re.DOTALL):
@@ -288,44 +287,35 @@ def is_time_question(text):
     text = text.lower()
     return bool(re.search(r"\b(время|час|time)\b", text))
 
-# --- Ассистент для универсальных вопросов с web_search (OpenAI Assistants API) ---
-async def assistant_web_search(prompt, user_id):
-    """Использует OpenAI Assistants API с инструментом web_search"""
-    try:
-        thread = openai_client.beta.threads.create()
-        openai_client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=prompt,
-        )
-        run = openai_client.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=ASSISTANT_ID,
-            tools=[{"type": "web_search"}]
-        )
-        # Ждём ответа ассистента (пуллинг)
-        for _ in range(60):
-            run = openai_client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-            if run.status in ["completed", "failed", "cancelled"]:
-                break
-            await asyncio.sleep(1)
-        if run.status != "completed":
-            return "Ошибка: ассистент не ответил вовремя (web search)."
-        # Получаем сообщение
-        msgs = openai_client.beta.threads.messages.list(thread_id=thread.id)
-        for m in reversed(msgs.data):
-            if m.role == "assistant":
-                return m.content[0].text.value
-        return "Ответ ассистента не найден."
-    except Exception as e:
-        return f"Ошибка при поиске в интернете: {e}"
+@dp.message(F.text)
+async def universal_image_handler(message: types.Message):
+    await handle_text_or_image(message, message.text)
 
-# Универсальная функция обработки текста (текст/голос)
 async def handle_text_or_image(message, text):
     user_id = message.from_user.id
     t = text.strip().lower()
     if t in ["помощь", "подписка", "админ"]:
         return
+
+    # --- Web Search via OpenAI Responses API ---
+    if is_web_search_query(text):
+        await message.answer("🔎 Делаю поиск в интернете через OpenAI Web Search, подожди секунду...", reply_markup=get_main_keyboard(user_id))
+        try:
+            response = openai_client.responses.create(
+                model="gpt-4.1",
+                tools=[{
+                    "type": "web_search_preview",
+                    # Можно добавить "search_context_size": "medium", "user_location": {...}
+                }],
+                input=text
+            )
+            answer = response.output_text
+            await message.answer(answer, reply_markup=get_main_keyboard(user_id))
+        except Exception as e:
+            await message.answer(f"Ошибка при поиске в интернете через OpenAI: {e}", reply_markup=get_main_keyboard(user_id))
+        return
+    # --- /Web Search ---
+
     for pattern in IMAGE_KEYWORDS:
         m = re.match(pattern, t)
         if m:
@@ -350,10 +340,34 @@ async def handle_text_or_image(message, text):
         await message.answer(f"Сейчас {now}", reply_markup=get_main_keyboard(user_id))
         return
 
-    # --- Используем ассистента с web_search ---
+    await db.add_message(user_id, "user", text)
+    history = await db.get_history(user_id, limit=16)
     try:
-        answer = await assistant_web_search(text, user_id)
-        await db.add_message(user_id, "user", text)
+        gpt_response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=history,
+        )
+        answer = gpt_response.choices[0].message.content
+
+        SEARCH_TRIGGERS = [
+            "не имею доступа к текущему времени",
+            "не имею доступа к интернету",
+            "я не могу узнать",
+            "я не знаю",
+            "я не обладаю актуальной информацией",
+            "моя база устарела",
+            "не могу ответить на этот вопрос",
+            "у меня нет информации",
+            "по состоянию на",
+            "пожалуйста, проверьте актуальную информацию",
+            "моя база данных не обновляется в реальном времени",
+            "вы можете посмотреть актуальную стоимость",
+            "я не могу предоставить текущую цену"
+        ]
+
+        if any(x in answer.lower() for x in SEARCH_TRIGGERS):
+            answer = "Я не нашёл свежей информации по твоему запросу."
+
         await db.add_message(user_id, "assistant", answer)
 
         if should_send_as_file(answer):
@@ -406,7 +420,7 @@ async def handle_voice(message: types.Message):
 # ------- Распознавание изображений (GPT-4o Vision) --------
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    pass  # здесь твоя логика или ничего, если FSM
+    pass  # Можно вставить сюда распознавание фото через vision, если потребуется
 
 # ------- Распознавание документов (GPT-4o + резюме) --------
 @dp.message(F.document)
@@ -505,6 +519,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
