@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ASSISTANT_ID = os.getenv("ASSISTANT_ID")
+ASSISTANT_ID = os.getenv("ASSISTANT_ID")  # Для Assistants API
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
@@ -47,11 +47,7 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Поиск Google AI Overview через SerpAPI (оставлен на случай fallback, но реально не используется) ---
-async def google_ai_search(query):
-    return None  # Можно реализовать свой метод поиска или оставить заглушку
-
-# --- Database logic
+# --- Database logic --- (не менялось)
 class Database:
     def __init__(self, dsn):
         self.dsn = dsn
@@ -292,6 +288,38 @@ def is_time_question(text):
     text = text.lower()
     return bool(re.search(r"\b(время|час|time)\b", text))
 
+# --- Ассистент для универсальных вопросов с web_search (OpenAI Assistants API) ---
+async def assistant_web_search(prompt, user_id):
+    """Использует OpenAI Assistants API с инструментом web_search"""
+    try:
+        thread = openai_client.beta.threads.create()
+        openai_client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=prompt,
+        )
+        run = openai_client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=ASSISTANT_ID,
+            tools=[{"type": "web_search"}]
+        )
+        # Ждём ответа ассистента (пуллинг)
+        for _ in range(60):
+            run = openai_client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+            if run.status in ["completed", "failed", "cancelled"]:
+                break
+            await asyncio.sleep(1)
+        if run.status != "completed":
+            return "Ошибка: ассистент не ответил вовремя (web search)."
+        # Получаем сообщение
+        msgs = openai_client.beta.threads.messages.list(thread_id=thread.id)
+        for m in reversed(msgs.data):
+            if m.role == "assistant":
+                return m.content[0].text.value
+        return "Ответ ассистента не найден."
+    except Exception as e:
+        return f"Ошибка при поиске в интернете: {e}"
+
 # Универсальная функция обработки текста (текст/голос)
 async def handle_text_or_image(message, text):
     user_id = message.from_user.id
@@ -322,34 +350,10 @@ async def handle_text_or_image(message, text):
         await message.answer(f"Сейчас {now}", reply_markup=get_main_keyboard(user_id))
         return
 
-    await db.add_message(user_id, "user", text)
-    history = await db.get_history(user_id, limit=16)
+    # --- Используем ассистента с web_search ---
     try:
-        gpt_response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=history,
-        )
-        answer = gpt_response.choices[0].message.content
-
-        SEARCH_TRIGGERS = [
-            "не имею доступа к текущему времени",
-            "не имею доступа к интернету",
-            "я не могу узнать",
-            "я не знаю",
-            "я не обладаю актуальной информацией",
-            "моя база устарела",
-            "не могу ответить на этот вопрос",
-            "у меня нет информации",
-            "по состоянию на",
-            "пожалуйста, проверьте актуальную информацию",
-            "моя база данных не обновляется в реальном времени",
-            "вы можете посмотреть актуальную стоимость",
-            "я не могу предоставить текущую цену"
-        ]
-
-        if any(x in answer.lower() for x in SEARCH_TRIGGERS):
-            answer = "Я не нашёл свежей информации по твоему запросу."
-
+        answer = await assistant_web_search(text, user_id)
+        await db.add_message(user_id, "user", text)
         await db.add_message(user_id, "assistant", answer)
 
         if should_send_as_file(answer):
@@ -501,6 +505,7 @@ async def handle_document(message: types.Message):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
 
 
 
