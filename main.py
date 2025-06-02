@@ -317,10 +317,10 @@ async def run_replicate_edit(photo_bytes, prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "version": "a9758cb2b7029bb98c8e5894e6c1c6249cf77cb511b4cc1e2c0d681fa830965c",  # SDXL 1.0
+        "version": "7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc",
         "input": {
-            "image": f"data:image/png;base64,{img_b64}",
-            "prompt": prompt
+            "prompt": prompt,
+            "image": f"data:image/png;base64,{img_b64}"
         }
     }
     async with httpx.AsyncClient(timeout=120) as client:
