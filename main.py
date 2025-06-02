@@ -45,7 +45,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
 
 # Replicate API для редактирования фото
-REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 SERPAPI_KEY = "78f4b4abef2f975f1b0576411a18c0d03e0e9999ae764e470e4e3ca6b10fdfcc"
 
