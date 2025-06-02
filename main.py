@@ -9,12 +9,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from dotenv import load_dotenv
 import asyncpg
 from fastapi import FastAPI, Request
 from openai import OpenAI
 from pydub import AudioSegment
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image
 import io
 
@@ -41,6 +43,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID"))
+
+# Replicate API для редактирования фото
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 SERPAPI_KEY = "78f4b4abef2f975f1b0576411a18c0d03e0e9999ae764e470e4e3ca6b10fdfcc"
 
@@ -137,7 +142,8 @@ db = Database(DATABASE_URL)
 
 def get_main_keyboard(user_id):
     buttons = [
-        [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")]
+        [KeyboardButton(text="ПОМОЩЬ"), KeyboardButton(text="ПОДПИСКА")],
+        [KeyboardButton(text="РЕДАКТИРОВАТЬ ФОТО")]  # НОВАЯ КНОПКА
     ]
     if user_id == OWNER_CHAT_ID:
         buttons[0].append(KeyboardButton(text="АДМИН"))
@@ -254,6 +260,89 @@ IMAGE_KEYWORDS = [
     r"^(generate|draw|create|make)\s*(image|picture)?",
 ]
 
+# ---------- FSM для редактирования фото ----------------
+class EditPhoto(StatesGroup):
+    waiting_for_photo = State()
+    waiting_for_edit_prompt = State()
+
+# Кнопка в меню — FSM-хендлер
+@dp.message(F.text.lower() == "редактировать фото")
+async def edit_photo_start(message: types.Message, state: FSMContext):
+    await message.answer("Отправь фото, которое хочешь отредактировать 📸", reply_markup=get_main_keyboard(message.from_user.id))
+    await state.set_state(EditPhoto.waiting_for_photo)
+
+@dp.message(EditPhoto.waiting_for_photo, F.photo)
+async def receive_photo_for_edit(message: types.Message, state: FSMContext):
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    photo_bytes_io = await bot.download_file(file.file_path)
+    photo_bytes = photo_bytes_io.read()
+    # Сохраняем фото во временный стейт
+    await state.update_data(photo=photo_bytes)
+    await message.answer("Что изменить на фото? Опиши текстом.", reply_markup=get_main_keyboard(message.from_user.id))
+    await state.set_state(EditPhoto.waiting_for_edit_prompt)
+
+@dp.message(EditPhoto.waiting_for_photo)
+async def wrong_content_photo(message: types.Message, state: FSMContext):
+    await message.answer("Пожалуйста, пришли фото (файл, не стикер)", reply_markup=get_main_keyboard(message.from_user.id))
+
+@dp.message(EditPhoto.waiting_for_edit_prompt, F.text)
+async def process_edit_prompt(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photo_bytes = data.get("photo")
+    prompt = message.text.strip()
+    await message.answer("Готовлю результат, жди 10-30 сек... 😎", reply_markup=get_main_keyboard(message.from_user.id))
+    # Отправляем фото в Replicate
+    try:
+        image_url = await run_replicate_edit(photo_bytes, prompt)
+        await message.answer_photo(image_url, caption="Готово! Если хочешь ещё — загрузи новое фото.", reply_markup=get_main_keyboard(message.from_user.id))
+    except Exception as e:
+        await message.answer(f"Ошибка редактирования: {e}", reply_markup=get_main_keyboard(message.from_user.id))
+    # Возврат к обычному диалогу (очищаем стейт)
+    await state.clear()
+
+@dp.message(EditPhoto.waiting_for_edit_prompt)
+async def wrong_content_prompt(message: types.Message, state: FSMContext):
+    await message.answer("Опиши словами, что изменить на фото.")
+
+# ----------- Функция для Replicate (edit) ----------
+async def run_replicate_edit(photo_bytes, prompt):
+    # Пример: Stable Diffusion XL (через API Replicate)
+    api_token = REPLICATE_API_TOKEN
+    url = "https://api.replicate.com/v1/predictions"
+    # base64 image
+    img_b64 = base64.b64encode(photo_bytes).decode("utf-8")
+    headers = {
+        "Authorization": f"Token {api_token}",
+        "Content-Type": "application/json"
+    }
+    # Под модель "stability-ai/sdxl" (или укажи нужную, например inpaint/face swap и т.д.)
+    payload = {
+        "version": "a9758cb2b7029bb98c8e5894e6c1c6249cf77cb511b4cc1e2c0d681fa830965c",  # SDXL 1.0
+        "input": {
+            "image": f"data:image/png;base64,{img_b64}",
+            "prompt": prompt
+        }
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        if resp.status_code != 201:
+            raise Exception(f"Replicate error: {resp.status_code}, {resp.text}")
+        prediction = resp.json()
+        # Ожидание результата
+        prediction_url = prediction["urls"]["get"]
+        while True:
+            r = await client.get(prediction_url, headers=headers)
+            output = r.json()
+            status = output["status"]
+            if status == "succeeded":
+                return output["output"][0]
+            elif status in ["failed", "canceled"]:
+                raise Exception("Replicate: обработка не удалась.")
+            await asyncio.sleep(2)
+
+# ------------------------------------------------------
+
 @dp.message(F.text)
 async def universal_image_handler(message: types.Message):
     await handle_text_or_image(message, message.text)
@@ -298,7 +387,7 @@ def is_time_question(text):
 async def handle_text_or_image(message, text):
     user_id = message.from_user.id
     t = text.strip().lower()
-    if t in ["помощь", "подписка", "админ"]:
+    if t in ["помощь", "подписка", "админ", "редактировать фото"]:
         return
     # Если "нарисуй/создай/сделай картинку" — генерим картинку!
     for pattern in IMAGE_KEYWORDS:
@@ -404,23 +493,24 @@ async def handle_voice(message: types.Message):
     # Тут главное отличие: кидаем текст напрямую в универсальный обработчик
     await handle_text_or_image(message, user_text)
 
-# Дальше обработка изображений, документов и т.д. — без изменений...
-
 # ------- Распознавание изображений (GPT-4o Vision) --------
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    # ... остальной код без изменений ...
+    # ... твой код для обработки фото (если не FSM) ...
     pass
 
 # ------- Распознавание документов (мультитригер) --------
 @dp.message(F.document)
 async def handle_document(message: types.Message):
-    # ... остальной код без изменений ...
+    # ... твой код для обработки документов ...
     pass
 
 if __name__ == "__main__":
     import uvicorn
+    import asyncio
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+
+
 
 
 
